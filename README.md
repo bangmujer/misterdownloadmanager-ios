@@ -13,11 +13,12 @@ SwiftUI reimplementation of [anefzaoui/misterdownloadmanager](https://github.com
 - Torrent metadata (.torrent parsing, file list, tracker announce, peer list) + experimental sequential single-file peer download
 - ZIP extraction (ZIPFoundation); downloaded files visible in the Files app, share, preview, rename
 - LAN remote control (plain HTTP, trusted Wi-Fi, foreground only), clipboard link detection, download notifications
+- In-app browser (Tools → Browser): WKWebView tabs, Chrome-style tab strip, Safari liquid-glass chrome (system materials), download capture into the queue, media finder, and AdBlock — built-in + custom URL filters compiled together into one content-rule list, allowlist wins, plus JavaScript-userscript "extensions" (Chrome extensions cannot run on iOS)
 - Themes (Classic, Dark, Light, High contrast, Metro, Adwaita, Breeze, Luna, Aero, Aqua), interface scale, URL scheme `mdm://add?url=…`
 
 ## Honestly not ported
 
-Browser-extension download capture, system tray, wake/shutdown, yt-dlp/ffmpeg processing, 7z/RAR via 7-Zip, MCP server, CLI switches, native-messaging host, DHT/uTP/UPnP torrenting and background seeding, the full 86-language catalogue, desktop screen-reader menus. See Settings → About in the app.
+Chrome extensions and the desktop browser native-messaging host (the in-app browser captures downloads itself instead), system tray, wake/shutdown, yt-dlp/ffmpeg processing, 7z/RAR via 7-Zip, MCP server, CLI switches, DHT/uTP/UPnP torrenting and background seeding, the full 86-language catalogue, desktop screen-reader menus. See Settings → About in the app.
 
 ## Build
 

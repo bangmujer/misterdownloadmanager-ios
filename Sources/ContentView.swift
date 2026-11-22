@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var showingTorrent = false
     @State private var showingSettings = false
     @State private var showingFiles = false
+    @State private var showingBrowser = false
     @State private var addURLPreset = ""
     @State private var confirmDelete: DownloadItem?
 
@@ -28,6 +29,7 @@ struct ContentView: View {
                     .sheet(isPresented: $showingTorrent) { TorrentAddView() }
                     .sheet(isPresented: $showingSettings) { SettingsView() }
                     .sheet(isPresented: $showingFiles) { DownloadedFilesView() }
+                    .fullScreenCover(isPresented: $showingBrowser) { BrowserView() }
                     .alert("Hapus download?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
                         Button("Hapus + file", role: .destructive) { if let it = confirmDelete { store.remove(id: it.id, deleteFile: true) } }
                         Button("Hapus dari daftar", role: .destructive) { if let it = confirmDelete { store.remove(id: it.id) } }
@@ -53,6 +55,7 @@ struct ContentView: View {
                 }
             }
             Section("Tools") {
+                Button { showingBrowser = true } label: { Label("Browser", systemImage: "globe") }
                 Button { showingGrabber = true } label: { Label("Video / Gallery Grabber", systemImage: "play.rectangle.on.rectangle") }
                 Button { showingTorrent = true } label: { Label("Add Torrent", systemImage: "magnet") }
                 Button { showingFiles = true } label: { Label("Downloaded Files", systemImage: "folder") }

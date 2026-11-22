@@ -19,6 +19,7 @@ final class DownloadStore: ObservableObject {
     @Published var pendingClipboardURL: String?
     @Published var remoteAddress: String?
     @Published var lastError: String?
+    @Published var browserSettings = BrowserSettings()
 
     private var activeTasks: [UUID: Task<Void, Never>] = [:]
     private var schedulerTimer: Timer?
@@ -38,9 +39,23 @@ final class DownloadStore: ObservableObject {
     private var stateURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("mdm-state.json")
     }
+    private var browserSettingsURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("mdm-browser-settings.json")
+    }
+    func saveBrowserSettings() {
+        if let data = try? JSONEncoder().encode(browserSettings) {
+            try? data.write(to: browserSettingsURL, options: .atomic)
+        }
+    }
+    private func loadBrowserSettings() {
+        guard let data = try? Data(contentsOf: browserSettingsURL),
+              let decoded = try? JSONDecoder().decode(BrowserSettings.self, from: data) else { return }
+        browserSettings = decoded
+    }
 
     init() {
         load()
+        loadBrowserSettings()
         startTimers()
         if settings.autoResumeOnLaunch {
             for item in items where item.state == .downloading || item.state == .queued {

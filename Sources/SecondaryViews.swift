@@ -61,9 +61,17 @@ struct SettingsView: View {
                     if let addr = store.remoteAddress { LabeledContent("Address", value: addr) }
                     Text("Plain HTTP on trusted home Wi-Fi only, while the app is in the foreground. The desktop remote uses HTTPS pairing; that pairing flow is not ported.").font(.caption).foregroundStyle(.secondary)
                 }
+                Section("Browser & AdBlock") {
+                    Toggle("Built-in AdBlock (automatic)", isOn: $store.browserSettings.adBlockEnabled)
+                    Toggle("Custom AdBlock (your URL filters)", isOn: $store.browserSettings.customAdBlockEnabled)
+                    Toggle("Desktop site", isOn: $store.browserSettings.desktopMode)
+                    TextField("Home page", text: $store.browserSettings.homePage)
+                        .autocapitalization(.none).autocorrectionDisabled()
+                    Text("The in-app browser (Tools → Browser) runs both AdBlock lists together and captures downloads straight into the queue. Chrome extensions cannot run on iOS — the browser's extensions are JavaScript userscripts, managed in the browser's shield panel.").font(.caption).foregroundStyle(.secondary)
+                }
                 Section("About & honest limits") {
                     Text("Mister Download Manager — iOS port. Original: github.com/anefzaoui/misterdownloadmanager, GPL-3.0, Rust/egui desktop app for Windows/Mac/Linux. This SwiftUI reimplementation keeps the download engine ideas (segmentation, resume, categories, queues, scheduler window, debrid, video grabber, torrent metadata, remote control) within iOS sandbox limits.")
-                    Text("Not ported: browser extension capture, system tray, wake/shutdown, yt-dlp/ffmpeg video processing, 7z/RAR via 7-Zip, MCP server, CLI switches, native-messaging host, DHT/uTP/UPnP torrenting and background seeding, 86 languages, screen-reader-perfect desktop menus. Nothing here pretends those work.")
+                    Text("Not ported: Chrome extensions and the desktop browser native-messaging host (the in-app browser captures downloads itself instead), system tray, wake/shutdown, yt-dlp/ffmpeg video processing, 7z/RAR via 7-Zip, MCP server, CLI switches, DHT/uTP/UPnP torrenting and background seeding, 86 languages, screen-reader-perfect desktop menus. Nothing here pretends those work.")
                         .font(.caption).foregroundStyle(.secondary)
                     Link("Original repository", destination: URL(string: "https://github.com/anefzaoui/misterdownloadmanager")!)
                     Link("License: GPL-3.0", destination: URL(string: "https://www.gnu.org/licenses/gpl-3.0.html")!)
@@ -72,6 +80,7 @@ struct SettingsView: View {
             .navigationTitle("Options")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { store.save(); dismiss() } } }
             .onReceive(store.$settings.dropFirst()) { _ in store.save() }
+            .onReceive(store.$browserSettings.dropFirst()) { _ in store.saveBrowserSettings() }
         }
     }
 }
