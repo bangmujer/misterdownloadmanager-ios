@@ -288,6 +288,13 @@ final class BrowserSession: ObservableObject {
     }
 
     func closeTab(_ id: UUID) {
+        // Closing the last remaining tab does not leave the user stuck:
+        // the tab is reset to a fresh start page instead (same behaviour
+        // as Chrome closing its last tab).
+        if tabs.count == 1, tabs.first?.id == id {
+            resetTab(id)
+            return
+        }
         guard tabs.count > 1 else { return }
         let idx = tabs.firstIndex { $0.id == id } ?? 0
         tabs.removeAll { $0.id == id }
@@ -296,6 +303,22 @@ final class BrowserSession: ObservableObject {
         webViews[id]?.stopLoading()
         webViews.removeValue(forKey: id)
         if selectedID == id { selectedID = tabs[max(0, idx - 1)].id }
+    }
+
+    /// Replace a tab with a fresh start-page tab (new identity, so the old
+    /// WKWebView — and its back/forward history — is discarded for a blank
+    /// one). The private/normal mode of the tab is kept.
+    func resetTab(_ id: UUID) {
+        guard let idx = tabs.firstIndex(where: { $0.id == id }) else { return }
+        let incognito = tabs[idx].isIncognito
+        webViews[id]?.stopLoading()
+        webViews.removeValue(forKey: id)
+        thumbnails.removeValue(forKey: id)
+        for gi in groups.indices { groups[gi].tabIDs.removeAll { $0 == id } }
+        var fresh = BrowserTabState()
+        fresh.isIncognito = incognito
+        tabs[idx] = fresh
+        selectedID = fresh.id
     }
 
     func navigateSelected(to url: URL) {
@@ -715,6 +738,8 @@ struct BrowserView: View {
             }
 
             Menu {
+                Button { dismiss() } label: { Label("Kembali ke Download", systemImage: "xmark.circle") }
+                Divider()
                 Button { session.goForward() } label: { Label("Maju", systemImage: "chevron.right") }
                     .disabled(session.selectedTab?.canGoForward != true)
                 if let tab = session.selectedTab, let link = URL(string: tab.urlString), link.scheme != nil {
@@ -1088,7 +1113,9 @@ struct TabOverviewView: View {
             Menu {
                 Button { showingNewGroup = true } label: { Label("Buat grup baru", systemImage: "folder.badge.plus") }
                 Button(role: .destructive) {
-                    for tab in session.tabs { session.closeTab(tab.id) }
+                    let ids = session.tabs.map(\.id)
+                    for id in ids { session.closeTab(id) }
+                    dismiss()
                 } label: { Label("Tutup semua tab", systemImage: "xmark") }
             } label: {
                 Image(systemName: "ellipsis")
@@ -1284,7 +1311,11 @@ struct TabCardView: View {
                 .frame(maxWidth: .infinity)
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 10))
-                Button { session.closeTab(tab.id) } label: {
+                Button {
+                    let wasLast = session.tabs.count <= 1
+                    session.closeTab(tab.id)
+                    if wasLast { onSelect() }
+                } label: {
                     Image(systemName: "xmark")
                         .font(.caption2.weight(.bold))
                         .frame(width: 24, height: 24)
@@ -1326,7 +1357,11 @@ struct TabCardView: View {
                 Button("Keluarkan dari grup") { session.setTabGroup(tab.id, groupID: nil) }
             }
             Divider()
-            Button(role: .destructive) { session.closeTab(tab.id) } label: { Label("Tutup tab", systemImage: "xmark") }
+            Button(role: .destructive) {
+                let wasLast = session.tabs.count <= 1
+                session.closeTab(tab.id)
+                if wasLast { onSelect() }
+            } label: { Label("Tutup tab", systemImage: "xmark") }
         }
         .onTapGesture { onSelect() }
     }
@@ -1587,6 +1622,7 @@ struct AdBlockPanelView: View {
     @State private var blockText = ""
     @State private var allowText = ""
     @State private var showingNewExtension = false
+    @State private var editingExtension: BrowserExtension?
 
     var body: some View {
         NavigationStack {
@@ -1620,11 +1656,23 @@ struct AdBlockPanelView: View {
                 }
                 Section("Extensions (JavaScript userscripts)") {
                     ForEach($store.browserSettings.extensions) { $ext in
-                        Toggle(ext.name, isOn: $ext.enabled)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Toggle(ext.name, isOn: $ext.enabled)
+                            HStack(spacing: 8) {
+                                Picker("Jalankan", selection: $ext.atDocumentStart) {
+                                    Text("Akhir dokumen").tag(false)
+                                    Text("Awal dokumen").tag(true)
+                                }
+                                .pickerStyle(.segmented)
+                                Button("Ubah") { editingExtension = $ext.wrappedValue }
+                                    .font(.subheadline)
+                            }
+                        }
+                        .padding(.vertical, 4)
                     }
                     .onDelete { store.browserSettings.extensions.remove(atOffsets: $0) }
                     Button("Add extension…") { showingNewExtension = true }
-                    Text("iOS cannot run Chrome extensions — these are page scripts (userscripts) that run inside this browser only, the same approach Safari extensions use. They cannot see other apps or the system.").font(.caption).foregroundStyle(.secondary)
+                    Text("iOS cannot run Chrome extensions — these are page scripts (userscripts) that run inside this browser only, the same approach Safari extensions use. They cannot see other apps or the system. Setiap script bisa dipilih jalannya di awal dokumen (sebelum halaman dimuat) atau akhir dokumen (sesudah halaman dimuat).").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Browser") {
                     Picker("Search engine", selection: $store.browserSettings.searchEngine) {
@@ -1655,6 +1703,7 @@ struct AdBlockPanelView: View {
             .navigationTitle("Browser & AdBlock")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { store.saveBrowserSettings(); dismiss() } } }
             .sheet(isPresented: $showingNewExtension) { NewExtensionView() }
+            .sheet(item: $editingExtension) { ext in EditExtensionView(ext: ext) }
         }
     }
 }
@@ -1664,12 +1713,19 @@ struct NewExtensionView: View {
     @Environment(\.dismiss) var dismiss
     @State private var name = ""
     @State private var source = ""
+    @State private var atDocumentStart = false
     var body: some View {
         NavigationStack {
             Form {
                 TextField("Extension name", text: $name)
                 TextEditor(text: $source).frame(minHeight: 160)
-                Text("JavaScript that runs on every page after it loads. Keep it short and page-only — no network access beyond the page itself.").font(.caption).foregroundStyle(.secondary)
+                Picker("Jalankan", selection: $atDocumentStart) {
+                    Text("Akhir dokumen").tag(false)
+                    Text("Awal dokumen").tag(true)
+                }
+                .pickerStyle(.segmented)
+                Text("Awal dokumen: script jalan sebelum halaman dimuat (misalnya memblokir sesuatu sejak awal). Akhir dokumen: script jalan setelah halaman selesai dimuat.").font(.caption).foregroundStyle(.secondary)
+                Text("JavaScript that runs on every page. Keep it short and page-only — no network access beyond the page itself.").font(.caption).foregroundStyle(.secondary)
             }
             .navigationTitle("New extension")
             .toolbar {
@@ -1677,8 +1733,55 @@ struct NewExtensionView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
                         guard !name.isEmpty, !source.isEmpty else { return }
-                        store.browserSettings.extensions.append(BrowserExtension(name: name, source: source, enabled: true))
+                        store.browserSettings.extensions.append(BrowserExtension(name: name, source: source, enabled: true, atDocumentStart: atDocumentStart))
                         store.saveBrowserSettings()
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct EditExtensionView: View {
+    @EnvironmentObject var store: DownloadStore
+    @Environment(\.dismiss) var dismiss
+    var extensionID: UUID
+    @State private var name: String
+    @State private var source: String
+    @State private var atDocumentStart: Bool
+
+    init(ext: BrowserExtension) {
+        extensionID = ext.id
+        _name = State(initialValue: ext.name)
+        _source = State(initialValue: ext.source)
+        _atDocumentStart = State(initialValue: ext.atDocumentStart)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Extension name", text: $name)
+                TextEditor(text: $source).frame(minHeight: 160)
+                Picker("Jalankan", selection: $atDocumentStart) {
+                    Text("Akhir dokumen").tag(false)
+                    Text("Awal dokumen").tag(true)
+                }
+                .pickerStyle(.segmented)
+                Text("Awal dokumen: script jalan sebelum halaman dimuat. Akhir dokumen: script jalan setelah halaman selesai dimuat.").font(.caption).foregroundStyle(.secondary)
+            }
+            .navigationTitle("Ubah extension")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Batal") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Simpan") {
+                        guard !name.isEmpty, !source.isEmpty else { return }
+                        if let idx = store.browserSettings.extensions.firstIndex(where: { $0.id == extensionID }) {
+                            store.browserSettings.extensions[idx].name = name
+                            store.browserSettings.extensions[idx].source = source
+                            store.browserSettings.extensions[idx].atDocumentStart = atDocumentStart
+                            store.saveBrowserSettings()
+                        }
                         dismiss()
                     }
                 }
