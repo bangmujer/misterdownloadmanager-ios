@@ -281,6 +281,11 @@ final class BrowserSession: ObservableObject {
     }
 
     func select(_ id: UUID) {
+        // Never select a tab that no longer exists (e.g. the overview's
+        // close-last-tab flow calls onSelect after resetTab already
+        // replaced the tab): selecting a dead id left the browser on a
+        // blank screen instead of the fresh start page.
+        guard tabs.contains(where: { $0.id == id }) else { return }
         selectedID = id
         touchTab(id)
     }
@@ -593,7 +598,15 @@ struct BrowserWebView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(session: session, tabID: tabID) }
 
     func makeUIView(context: Context) -> WKWebView {
-        if let existing = session.webViews[tabID] { return existing }
+        if let existing = session.webViews[tabID] {
+            // A new coordinator was created for this tab (e.g. after a tab
+            // switch, since only the selected tab's view is in the
+            // hierarchy): re-attach the state observations, or progress /
+            // loading / title / URL stop updating and the stop button
+            // freezes on the X icon.
+            context.coordinator.observe(webView: existing)
+            return existing
+        }
         let isIncognito = session.tabs.first(where: { $0.id == tabID })?.isIncognito ?? false
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
@@ -609,6 +622,10 @@ struct BrowserWebView: UIViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
+        // Pull down from the top to reload, Safari-style.
+        let refreshControl = UIRefreshControl()
+        refreshControl.addTarget(context.coordinator, action: #selector(Coordinator.didPullToRefresh(_:)), for: .valueChanged)
+        webView.scrollView.refreshControl = refreshControl
         // DevTools bridge: message handler + document-start script, added
         // before the first load so early console/network activity is seen.
         config.userContentController.add(context.coordinator, name: "mdmDevTools")
@@ -650,9 +667,20 @@ struct BrowserWebView: UIViewRepresentable {
         let session: BrowserSession
         let tabID: UUID
         private var observations: [NSKeyValueObservation] = []
+        private weak var webView: WKWebView?
         init(session: BrowserSession, tabID: UUID) { self.session = session; self.tabID = tabID }
 
+        @objc func didPullToRefresh(_ sender: UIRefreshControl) {
+            webView?.reload()
+        }
+
         func observe(webView: WKWebView) {
+            self.webView = webView
+            // Correct any stale tab state left by a previous coordinator
+            // (e.g. isLoading stuck true) right away.
+            session.updateTab(id: tabID, title: webView.title, urlString: webView.url?.absoluteString,
+                              progress: webView.estimatedProgress, isLoading: webView.isLoading,
+                              canGoBack: webView.canGoBack, canGoForward: webView.canGoForward)
             observations = [
                 webView.observe(\.estimatedProgress, options: [.new]) { [weak self] wv, _ in
                     guard let self else { return }
@@ -669,6 +697,7 @@ struct BrowserWebView: UIViewRepresentable {
                 },
                 webView.observe(\.isLoading, options: [.new]) { [weak self] wv, _ in
                     guard let self else { return }
+                    if !wv.isLoading { wv.scrollView.refreshControl?.endRefreshing() }
                     self.session.updateTab(id: self.tabID, isLoading: wv.isLoading,
                                            canGoBack: wv.canGoBack, canGoForward: wv.canGoForward)
                 },
