@@ -539,15 +539,25 @@ struct BrowserWebView: UIViewRepresentable {
             let downloadExts = ["zip", "rar", "7z", "apk", "ipa", "dmg", "exe", "msi", "pkg", "iso", "torrent", "mp4", "mkv", "mov", "mp3", "flac", "epub"]
             var isDownload = false
             if let http = navigationResponse.response as? HTTPURLResponse,
-               let disp = http.allHeaderFields["Content-Disposition"] as? String,
+               let disp = http.value(forHTTPHeaderField: "Content-Disposition"),
                disp.lowercased().contains("attachment") {
                 isDownload = true
             }
+            let mime = navigationResponse.response.mimeType ?? ""
             if let url = navigationResponse.response.url {
                 let ext = url.pathExtension.lowercased()
-                let mime = navigationResponse.response.mimeType ?? ""
                 if downloadExts.contains(ext) && !mime.hasPrefix("text/html") { isDownload = true }
             }
+            // Servers that hide the filename (e.g. /download?id=123) but serve
+            // a binary payload: treat octet-stream and archive/executable
+            // payloads as downloads too, so they land in the MDM queue
+            // automatically instead of opening a blank page.
+            let downloadMimes = ["application/octet-stream", "application/zip",
+                "application/x-rar-compressed", "application/x-7z-compressed",
+                "application/x-msdownload", "application/x-apple-diskimage",
+                "application/x-iso9660-image", "application/x-bittorrent",
+                "application/x-executable"]
+            if downloadMimes.contains(mime) { isDownload = true }
             if isDownload, let url = navigationResponse.response.url {
                 session.onDownloadCaptured?(url)
                 decisionHandler(.cancel)
