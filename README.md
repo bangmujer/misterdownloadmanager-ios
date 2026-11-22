@@ -1,8 +1,8 @@
 # Mister Download Manager — iOS port
 
-SwiftUI reimplementation of [anefzaoui/misterdownloadmanager](https://github.com/anefzaoui/misterdownloadmanager) (GPL-3.0, Rust/egui desktop app for Windows, Mac and Linux), scoped to what iOS sandboxing actually allows.
+SwiftUI reimplementation of [anefzaoui/misterdownloadmanager](https://github.com/anefzaoui/misterdownloadmanager) (GPL-3.0, Rust/egui desktop app for Windows, Mac and Linux), scoped to what iOS sandboxing actually allows. Plus a full in-app web browser, built for iOS 16 and later.
 
-## What is ported
+## Download manager
 
 - Segmented HTTP/HTTPS downloads (up to 16 connections), resume, per-segment progress bars, speed limiting, retry
 - Categories (Video, Music, Documents, Compressed, Programs, Images, Torrents, Other), search, queue / start-all / pause-all
@@ -13,14 +13,27 @@ SwiftUI reimplementation of [anefzaoui/misterdownloadmanager](https://github.com
 - Torrent metadata (.torrent parsing, file list, tracker announce, peer list) + experimental sequential single-file peer download
 - ZIP extraction (ZIPFoundation); downloaded files visible in the Files app, share, preview, rename
 - LAN remote control (plain HTTP, trusted Wi-Fi, foreground only), clipboard link detection, download notifications
-- In-app browser (Tools → Browser): WKWebView tabs, Chrome-style tab strip, Safari liquid-glass chrome (system materials), download capture into the queue, media finder, and AdBlock — built-in + custom URL filters compiled together into one content-rule list, allowlist wins, plus JavaScript-userscript "extensions" (Chrome extensions cannot run on iOS)
 - Themes (Classic, Dark, Light, High contrast, Metro, Adwaita, Breeze, Luna, Aero, Aqua), interface scale, URL scheme `mdm://add?url=…`
+
+## In-app browser
+
+Open it from the Downloads screen ("Kembali ke Download" in the ⋯ menu goes back). Safari-style floating bottom navbar (back / address pill with progress / tabs / ⋯ menu) over a Chrome-style tab system.
+
+- **Tabs:** unlimited tabs, live snapshot previews, favicons, search filter, swipe/tab grid overview, tab groups (name + color + favicon collage), incognito tabs with a non-persistent data store, inactive tabs (unused for 21+ days), pull-to-refresh, stop/reload in the address pill, back/forward gestures
+- **Start page:** search box, favorites grid (bookmarks), privacy card with factual stats, Google as the default search engine (DuckDuckGo, Bing, Yahoo, Ecosia and Brave available)
+- **AdBlock:** built-in + custom URL filters compiled together into one content-rule list, allowlist wins, per-site shield in the address pill
+- **Extensions:** JavaScript userscripts (real Chrome extensions cannot run on iOS) with document-start / document-end timing, create/edit/enable/disable, applied per tab
+- **Download capture:** attachment responses, common file extensions and binary MIME types are intercepted straight into the download queue. JavaScript-generated `blob:` downloads are not captured yet
+- **Media finder:** lists playable video/audio on the page for one-tap download
+- **Background playback + Picture in Picture:** YouTube and other media keep playing with the app in the background or the screen locked (toggleable in settings). PiP is entered from the floating **PiP** button that appears on the page while a video plays — a real tap on the page is what WebKit accepts as the gesture for PiP — or from ⋯ > Picture in Picture. YouTube can change its player at any time, so this may need maintenance
+- **DevTools (F12):** ⋯ > DevTools (F12) opens Console (page logs + JavaScript REPL), Elements (tap-to-inspect, computed style, full DOM with filter), Network (navigation responses + live fetch/XHR + resource timing) and Storage (cookies, local/session storage, with clearing). No JavaScript debugger/breakpoints, profiler, device emulation or WebSocket frame inspection — WKWebView does not expose those
+- **Ask AI ("Minta AI"):** send the current page (title, URL, text) to Gemini, ChatGPT or Claude via their public streaming APIs, or hand off to Muse on the web. API keys are entered in the app and stored only in the device Keychain — they are never written to settings files or sent anywhere else
 
 ## Honestly not ported
 
 Chrome extensions and the desktop browser native-messaging host (the in-app browser captures downloads itself instead), system tray, wake/shutdown, yt-dlp/ffmpeg processing, 7z/RAR via 7-Zip, MCP server, CLI switches, DHT/uTP/UPnP torrenting and background seeding, the full 86-language catalogue, desktop screen-reader menus. See Settings → About in the app.
 
-## Build
+## Build & install
 
 Push to `main` — GitHub Actions (macOS runner + XcodeGen) builds an **unsigned** `.ipa` artifact. Install via TrollStore / Feather / ESign / AltStore. No signing identity is required or used.
 
@@ -29,6 +42,10 @@ brew install xcodegen
 xcodegen generate
 xcodebuild -project MDM.xcodeproj -scheme MDM -configuration Release -sdk iphoneos -archivePath build/MDM.xcarchive archive CODE_SIGNING_ALLOWED=NO
 ```
+
+## Privacy
+
+Downloads and browsing stay on the device. Ask AI provider keys live only in the iOS Keychain. No account, no analytics, no tracking.
 
 ## License
 

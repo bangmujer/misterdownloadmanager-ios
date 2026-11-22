@@ -457,6 +457,14 @@ final class BrowserSession: ObservableObject {
                             injectionTime: .atDocumentStart,
                             forMainFrameOnly: true))
                     }
+                    // In-page PiP button: only a real tap on the page is
+                    // accepted by WebKit as the gesture for entering PiP.
+                    if settings.pictureInPicture {
+                        ucc.addUserScript(WKUserScript(
+                            source: BrowserSession.pipButtonScript,
+                            injectionTime: .atDocumentEnd,
+                            forMainFrameOnly: true))
+                    }
                     webView.customUserAgent = settings.desktopMode
                         ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
                         : nil
@@ -588,6 +596,70 @@ final class BrowserSession: ObservableObject {
       setTimeout(function(){ attempt(); }, 500);
       out.status = 'pip-playing';
       return JSON.stringify(out);
+    })()
+    """
+
+    /// Floating in-page Picture in Picture button. WebKit only accepts
+    /// entering PiP in response to a real tap on the page, so evaluated
+    /// JavaScript from the native menu cannot do it reliably: the button
+    /// lives in the page itself, appears only while a sizeable video is
+    /// playing, and its tap calls webkitSetPresentationMode directly.
+    static let pipButtonScript = """
+    (function() {
+      if (window.__mdmPiPButton) return;
+      window.__mdmPiPButton = true;
+      var btn = null;
+      function bestVideo() {
+        var vids = document.querySelectorAll('video');
+        var best = null, bestArea = 0, bestPlaying = null, bestPlayingArea = 0;
+        for (var i = 0; i < vids.length; i++) {
+          var v = vids[i];
+          if (v.readyState < 2 || v.videoWidth < 200) continue;
+          var r = v.getBoundingClientRect();
+          var a = Math.max(0, r.width) * Math.max(0, r.height);
+          if (a <= 0) continue;
+          if (a > bestArea) { bestArea = a; best = v; }
+          if (!v.paused && !v.ended && a > bestPlayingArea) { bestPlayingArea = a; bestPlaying = v; }
+        }
+        return bestPlaying || best;
+      }
+      function inPiP(v) {
+        try { return v.webkitPresentationMode === 'picture-in-picture'; } catch (e) { return false; }
+      }
+      function refresh() {
+        if (document.webkitFullscreenElement) { if (btn) btn.style.display = 'none'; return; }
+        var v = bestVideo();
+        if (v && !v.paused && !v.ended && !inPiP(v)) {
+          if (!btn) {
+            btn = document.createElement('button');
+            btn.textContent = 'PiP';
+            btn.setAttribute('aria-label', 'Picture in Picture');
+            btn.style.cssText = 'position:fixed;right:14px;bottom:96px;z-index:2147483647;padding:8px 14px;border:0;border-radius:999px;background:rgba(0,0,0,0.65);color:#fff;font:600 13px -apple-system,system-ui,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,0.35);';
+            btn.addEventListener('click', function(ev) {
+              ev.preventDefault(); ev.stopPropagation();
+              var target = bestVideo();
+              if (!target) return;
+              try { target.removeAttribute('disablepictureinpicture'); } catch (e2) {}
+              try {
+                if (typeof target.webkitSetPresentationMode === 'function') {
+                  target.webkitSetPresentationMode('picture-in-picture');
+                  return;
+                }
+              } catch (e3) {}
+              try { if (target.requestPictureInPicture) target.requestPictureInPicture(); } catch (e4) {}
+            });
+            document.documentElement.appendChild(btn);
+          }
+          btn.style.display = '';
+        } else if (btn) {
+          btn.style.display = 'none';
+        }
+      }
+      document.addEventListener('play', refresh, true);
+      document.addEventListener('pause', refresh, true);
+      document.addEventListener('webkitpresentationmodechanged', refresh, true);
+      setInterval(refresh, 1000);
+      refresh();
     })()
     """
 
