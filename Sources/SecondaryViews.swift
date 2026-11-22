@@ -72,6 +72,7 @@ struct SettingsView: View {
                     Toggle("Deteksi alamat (buka di Google Maps)", isOn: $store.browserSettings.detectAddresses)
                     Toggle("Web Inspector (periksa dari Safari di Mac)", isOn: $store.browserSettings.webInspector)
                     Toggle("Lewati timer tunggu (countdown download)", isOn: $store.browserSettings.skipTimers)
+                    Toggle("Tanpa redirect (klik download langsung ke link final)", isOn: $store.browserSettings.noRedirects)
                     TextField("Home page", text: $store.browserSettings.homePage)
                         .autocapitalization(.none).autocorrectionDisabled()
                     Text("The in-app browser (Tools → Browser) runs both AdBlock lists together and captures downloads straight into the queue. Chrome extensions cannot run on iOS — the browser's extensions are JavaScript userscripts, managed in the browser's shield panel.").font(.caption).foregroundStyle(.secondary)

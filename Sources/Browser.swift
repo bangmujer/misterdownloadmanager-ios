@@ -84,6 +84,9 @@ struct BrowserSettings: Codable {
     var webInspector: Bool = true
     // Timer bypass: speed up countdown waits on download pages.
     var skipTimers: Bool = false
+    // No-redirect mode: download clicks go straight to the final link,
+    // cross-host popups are dropped.
+    var noRedirects: Bool = true
     var bookmarks: [BrowserBookmark] = BrowserBookmark.defaults
     // Ask AI: provider id ("Gemini", "ChatGPT", "Claude", "Muse") + model per provider.
     // API keys are NOT stored here — see KeychainHelper in BrowserAI.swift.
@@ -612,6 +615,14 @@ final class BrowserSession: ObservableObject {
                             injectionTime: .atDocumentStart,
                             forMainFrameOnly: true))
                     }
+                    // No-redirect mode: download clicks go straight to the
+                    // final link, cross-host popups are dropped.
+                    if settings.noRedirects {
+                        ucc.addUserScript(WKUserScript(
+                            source: BrowserSession.redirectBlockScript,
+                            injectionTime: .atDocumentStart,
+                            forMainFrameOnly: true))
+                    }
                     webView.allowsLinkPreview = settings.linkPreview
                     if #available(iOS 16.4, *) { webView.isInspectable = settings.webInspector }
                     webView.customUserAgent = settings.desktopMode
@@ -985,6 +996,92 @@ final class BrowserSession: ObservableObject {
     })()
     """
 
+    /// No-redirect mode: clicks on download links go straight to the
+    /// link's own URL instead of through the page's click handlers
+    /// (which open ad popups and never follow the link), and cross-host
+    /// window.open calls are dropped. An overlay scan unblocks download
+    /// buttons covered by invisible overlay elements (the sfile.co trace
+    /// showed the button covered by an overlay whose click opened a
+    /// Shopee affiliate popup while the real download never started).
+    /// Same-host popups and ordinary tapped links are untouched.
+    static let redirectBlockScript = """
+    (function() {
+      if (window.__mdmNoRedirect) return;
+      window.__mdmNoRedirect = true;
+      var FILE_EXT = /\\.(zip|rar|7z|apk|ipa|dmg|exe|msi|pkg|iso|torrent|mp4|mkv|mov|mp3|flac|epub)(\\?|#|$)/i;
+      function resolve(href) {
+        try { return new URL(href, location.href); } catch (e) { return null; }
+      }
+      function isFileURL(u) { return FILE_EXT.test(u.pathname); }
+      function isCrossHost(u) { return u.hostname !== location.hostname; }
+      var nativeOpen = window.open.bind(window);
+      window.open = function(url, target, features) {
+        if (url == null || url === '') return null;
+        var u = resolve(String(url));
+        if (!u) return null;
+        if (isCrossHost(u)) {
+          if (isFileURL(u)) { location.assign(u.href); }
+          return null;
+        }
+        return nativeOpen.apply(window, arguments);
+      };
+      document.addEventListener('click', function(ev) {
+        var t = ev.target;
+        var a = t && t.closest ? t.closest('a[href]') : null;
+        if (!a) return;
+        var href = a.getAttribute('href');
+        if (!href || href.charAt(0) === '#') return;
+        var u = resolve(href);
+        if (!u) return;
+        var text = a.innerText || '';
+        var isDownload = isFileURL(u) || /\\/download\\//i.test(u.pathname) ||
+          a.hasAttribute('download') || /download|unduh/i.test(text);
+        if (isDownload) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          ev.stopImmediatePropagation();
+          location.assign(u.href);
+          return;
+        }
+        if (a.target === '_blank' && isCrossHost(u)) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          ev.stopImmediatePropagation();
+          location.assign(u.href);
+        }
+      }, true);
+      function unblockOverlays() {
+        try {
+          if (!document.body) return;
+          var els = document.querySelectorAll('a[href], button');
+          for (var i = 0; i < els.length; i++) {
+            var el = els[i];
+            var text = el.innerText || '';
+            if (!/download|unduh/i.test(text)) continue;
+            var r = el.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) continue;
+            var top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+            if (!top || top === el || el.contains(top)) continue;
+            var node = top, isAncestor = false;
+            while (node) { if (node === el) { isAncestor = true; break; } node = node.parentElement; }
+            if (isAncestor) continue;
+            var topText = (top.innerText || '').trim();
+            var cls = (top.id || '') + ' ' + (top.className || '');
+            if (topText.length === 0 || /ad|ads|promo|banner|overlay|popup|affiliate/i.test(cls)) {
+              top.style.pointerEvents = 'none';
+            }
+          }
+        } catch (e) {}
+      }
+      setInterval(unblockOverlays, 600);
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', unblockOverlays);
+      } else {
+        unblockOverlays();
+      }
+    })()
+    """
+
     /// Reader-mode extraction (best effort): the <article> element, or
     /// the container with the most paragraph text. Scripts, chrome and
     /// inline event handlers are stripped; images are dropped.
@@ -1266,6 +1363,14 @@ struct BrowserWebView: UIViewRepresentable {
             session.clearPending(for: tabID)
         }
 
+        // File URLs (same extension set as download capture below), used
+        // by the no-redirect rules so real downloads are never dropped.
+        private static let downloadExtensions: Set<String> = ["zip", "rar", "7z", "apk", "ipa", "dmg", "exe", "msi", "pkg", "iso", "torrent", "mp4", "mkv", "mov", "mp3", "flac", "epub"]
+
+        private static func isFileURL(_ url: URL) -> Bool {
+            downloadExtensions.contains(url.pathExtension.lowercased())
+        }
+
         // Download capture: attachment responses and non-web files go to the MDM queue.
         func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                      decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
@@ -1309,8 +1414,20 @@ struct BrowserWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            // Long-press "Open in new tab" etc. stay in this browser.
+            // No-redirect mode: script-opened windows (window.open,
+            // popups) to another host are dropped outright instead of
+            // taking over this tab; file URLs still load so download
+            // capture catches them. Tapped links (linkActivated, e.g.
+            // long-press "Open in new tab") keep the existing same-tab
+            // behaviour.
             if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
+                if session.latestSettings.noRedirects,
+                   navigationAction.navigationType != .linkActivated,
+                   url.host != webView.url?.host,
+                   !Self.isFileURL(url) {
+                    decisionHandler(.cancel)
+                    return
+                }
                 webView.load(URLRequest(url: url))
                 decisionHandler(.cancel)
                 return
@@ -1320,6 +1437,15 @@ struct BrowserWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                      for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+            // No-redirect mode drops cross-host script-opened windows
+            // outright (the in-page script covers tapped links).
+            if session.latestSettings.noRedirects,
+               navigationAction.navigationType != .linkActivated,
+               let url = navigationAction.request.url,
+               url.host != webView.url?.host,
+               !Self.isFileURL(url) {
+                return nil
+            }
             // Popup blocker: script-opened windows (window.open) are
             // dropped when enabled; links the user tapped (linkActivated)
             // still open in this tab.
@@ -3118,7 +3244,8 @@ struct AdBlockPanelView: View {
                     Toggle("Deteksi alamat (buka di Google Maps)", isOn: $store.browserSettings.detectAddresses)
                     Toggle("Web Inspector (periksa dari Safari di Mac)", isOn: $store.browserSettings.webInspector)
                     Toggle("Lewati timer tunggu (countdown download)", isOn: $store.browserSettings.skipTimers)
-                    Text("Blokir popup menahan jendela yang dibuka script (window.open); tautan yang diketuk tetap dibuka. Deteksi alamat menandai alamat jalan di halaman menjadi tautan ke Google Maps untuk rute dan info lokal. Web Inspector memungkinkan Safari di Mac memeriksa halaman web ini. Lewati timer mempercepat hitung mundur di halaman download sampai 50x dan mengaktifkan tombol download yang dikunci timer; timer yang ditegakkan server dan verifikasi manusia (mis. Cloudflare) tidak bisa dilewati.").font(.caption).foregroundStyle(.secondary)
+                    Toggle("Tanpa redirect (klik download langsung ke link final)", isOn: $store.browserSettings.noRedirects)
+                    Text("Blokir popup menahan jendela yang dibuka script (window.open); tautan yang diketuk tetap dibuka. Deteksi alamat menandai alamat jalan di halaman menjadi tautan ke Google Maps untuk rute dan info lokal. Web Inspector memungkinkan Safari di Mac memeriksa halaman web ini. Lewati timer mempercepat hitung mundur di halaman download sampai 50x dan mengaktifkan tombol download yang dikunci timer; timer yang ditegakkan server dan verifikasi manusia (mis. Cloudflare) tidak bisa dilewati. Tanpa redirect membuat klik tombol download langsung membuka link finalnya dan membuang popup ke situs lain; popup login/pembayaran yang sah bisa ikut tertahan, matikan kalau perlu.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Minta AI di browser") {
                     Picker("AI", selection: $store.browserSettings.aiProvider) {
