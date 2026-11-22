@@ -1,0 +1,36 @@
+name: Build MDM iOS IPA (unsigned)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build-ipa:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select latest Xcode
+        run: |
+          LATEST_XCODE=$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)
+          sudo xcode-select -s "$LATEST_XCODE/Contents/Developer"
+          xcodebuild -version
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate
+      - name: Build unsigned archive
+        run: |
+          xcodebuild -project MDM.xcodeproj -scheme MDM -configuration Release -sdk iphoneos -archivePath build/MDM.xcarchive archive CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+      - name: Package unsigned IPA from xcarchive
+        run: |
+          mkdir -p build/ipa/Payload
+          cp -R build/MDM.xcarchive/Products/Applications/*.app build/ipa/Payload/
+          (cd build/ipa && zip -qr misterdownloadmanager-unsigned.ipa Payload)
+          ls -lh build/ipa/
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: misterdownloadmanager-ios-unsigned-ipa
+          path: build/ipa/*.ipa
+          retention-days: 30
