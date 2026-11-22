@@ -134,9 +134,17 @@ enum RelativeTime {
 // MARK: - Ad-block rule compilation
 
 enum AdBlockRules {
-    /// Built-in block patterns (domains/substrings). Kept deliberately small:
-    /// a curated subset, not a full EasyList (that is ~60k rules and needs
-    /// regular list updates, which this app does not fetch).
+    /// Snapshot date of the bundled Ghostery filter lists (EasyList +
+    /// EasyPrivacy, converted to WKContentRuleList JSON by
+    /// tools/build-ghostery-rules.py). Part of the compiled-list
+    /// identifiers, so a refreshed snapshot recompiles instead of
+    /// reusing a stale cached list.
+    static let ghosterySnapshot = "2026-11-22"
+    static let ghosteryChunkCount = 4
+    static let ghosteryNetworkChunkCount = 3
+
+    /// Built-in block patterns (domains/substrings). Only a last-resort
+    /// fallback now: the bundled Ghostery lists carry the real blocking.
     static let builtinPatterns: [String] = [
         "doubleclick.net", "googlesyndication.com", "googleadservices.com",
         "adnxs.com", "criteo.com", "taboola.com", "outbrain.com",
@@ -170,7 +178,10 @@ enum AdBlockRules {
         return ".*" + escaped + ".*"
     }
 
-    static func ruleJSON(settings: BrowserSettings) -> String {
+    /// User rules from settings: custom block filters, then the allowlist
+    /// last (ignore-previous-rules only cancels earlier rules, and these
+    /// are appended after the Ghostery rules in every chunk).
+    static func dynamicRules(settings: BrowserSettings) -> [[String: Any]] {
         var rules: [[String: Any]] = []
         func blockRule(pattern: String) -> [String: Any] {
             ["trigger": ["url-filter": pattern, "resource-type": ["script", "image", "xmlhttprequest", "media", "font", "websocket"]],
@@ -180,33 +191,114 @@ enum AdBlockRules {
             ["trigger": ["url-filter": pattern],
              "action": ["type": "ignore-previous-rules"]]
         }
-        if settings.adBlockEnabled {
-            for p in builtinPatterns {
-                rules.append(blockRule(pattern: ".*" + escapeRegex(p) + ".*"))
-            }
-        }
         if settings.customAdBlockEnabled {
             for line in settings.customBlockFilters {
                 if let r = regex(for: line) { rules.append(blockRule(pattern: r)) }
             }
         }
-        // Allowlist last: ignore-previous-rules only cancels earlier rules.
         for line in settings.customAllowFilters {
             if let r = regex(for: line) { rules.append(allowRule(pattern: r)) }
         }
-        if rules.isEmpty { return "[]" }
-        let data = (try? JSONSerialization.data(withJSONObject: rules)) ?? Data("[]".utf8)
-        return String(data: data, encoding: .utf8) ?? "[]"
+        return rules
     }
 
-    static func compile(settings: BrowserSettings, completion: @escaping (WKContentRuleList?) -> Void) {
-        let json = ruleJSON(settings: settings)
-        WKContentRuleListStore.default().compileContentRuleList(
-            forIdentifier: "mdm-adblock",
-            encodedContentRuleList: json
-        ) { list, error in
-            if error != nil { completion(nil); return }
-            completion(list)
+    static func bundledChunk(_ index: Int) -> [[String: Any]]? {
+        guard let url = Bundle.main.url(forResource: "ghostery-rules-\(index)", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let rules = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
+        return rules
+    }
+
+    /// Stable hash (FNV-1a) for compiled-list identifiers: Swift's
+    /// hashValue is randomised per launch, so it cannot key the store.
+    static func stableHash(_ s: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in s.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return String(format: "%016llx", hash)
+    }
+
+    static func compile(settings: BrowserSettings, completion: @escaping ([WKContentRuleList]) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let dynamic = dynamicRules(settings: settings)
+            if !settings.adBlockEnabled, dynamic.isEmpty {
+                completion([])
+                return
+            }
+            let dynamicJSON = (try? JSONSerialization.data(withJSONObject: dynamic))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
+            let tag = stableHash(dynamicJSON)
+
+            // Candidate rule sets, best first: full Ghostery lists, then
+            // network-only, then the tiny built-in patterns. Each set is
+            // an array of chunks; the user rules are appended to every
+            // chunk so the allowlist cancels Ghostery blocks too.
+            var attempts: [[[String: Any]]] = []
+            if settings.adBlockEnabled {
+                var full: [[[String: Any]]] = []
+                for i in 1...ghosteryChunkCount {
+                    guard let chunk = bundledChunk(i) else { break }
+                    full.append(chunk + dynamic)
+                }
+                if full.count == ghosteryChunkCount { attempts.append(full) }
+                var network: [[[String: Any]]] = []
+                for i in 1...ghosteryNetworkChunkCount {
+                    guard let chunk = bundledChunk(i) else { break }
+                    network.append(chunk + dynamic)
+                }
+                if network.count == ghosteryNetworkChunkCount { attempts.append(network) }
+            }
+            let builtin = builtinPatterns.map { pattern -> [String: Any] in
+                ["trigger": ["url-filter": ".*" + escapeRegex(pattern) + ".*",
+                             "resource-type": ["script", "image", "xmlhttprequest", "media", "font", "websocket"]],
+                 "action": ["type": "block"]]
+            }
+            attempts.append([(settings.adBlockEnabled ? builtin : []) + dynamic])
+
+            let store = WKContentRuleListStore.default()
+            func loadChunk(_ rules: [[String: Any]], identifier: String, completion: @escaping (WKContentRuleList?) -> Void) {
+                store.lookUpContentRuleList(forIdentifier: identifier) { list, _ in
+                    if let list { completion(list); return }
+                    guard let data = try? JSONSerialization.data(withJSONObject: rules),
+                          let json = String(data: data, encoding: .utf8) else {
+                        completion(nil)
+                        return
+                    }
+                    store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json) { list, _ in
+                        completion(list)
+                    }
+                }
+            }
+            func tryAttempt(_ index: Int) {
+                guard index < attempts.count else {
+                    completion([])
+                    return
+                }
+                let chunks = attempts[index]
+                var lists: [WKContentRuleList?] = Array(repeating: nil, count: chunks.count)
+                var failed = false
+                let lock = NSLock()
+                let group = DispatchGroup()
+                for (i, chunk) in chunks.enumerated() {
+                    group.enter()
+                    loadChunk(chunk, identifier: "mdm-ghostery-\(ghosterySnapshot)-\(i)-\(tag)") { list in
+                        lock.lock()
+                        if let list { lists[i] = list } else { failed = true }
+                        lock.unlock()
+                        group.leave()
+                    }
+                }
+                group.notify(queue: .global(qos: .userInitiated)) {
+                    if !failed {
+                        completion(lists.compactMap { $0 })
+                    } else {
+                        tryAttempt(index + 1)
+                    }
+                }
+            }
+            tryAttempt(0)
         }
     }
 }
@@ -465,14 +557,14 @@ final class BrowserSession: ObservableObject {
 
     func applyRulesAndScripts(settings: BrowserSettings) {
         latestSettings = settings
-        AdBlockRules.compile(settings: settings) { [weak self] list in
+        AdBlockRules.compile(settings: settings) { [weak self] lists in
             guard let self else { return }
             DispatchQueue.main.async {
-                self.blockedStatus = list == nil ? "AdBlock: off (no rules)" : "AdBlock: on"
+                self.blockedStatus = lists.isEmpty ? "AdBlock: off (no rules)" : "AdBlock: on"
                 for (_, webView) in self.webViews {
                     let ucc = webView.configuration.userContentController
                     ucc.removeAllContentRuleLists()
-                    if let list { ucc.add(list) }
+                    for list in lists { ucc.add(list) }
                     ucc.removeAllUserScripts()
                     for ext in settings.extensions where ext.enabled {
                         ucc.addUserScript(WKUserScript(
@@ -2867,9 +2959,9 @@ struct AdBlockPanelView: View {
         NavigationStack {
             Form {
                 Section("AdBlock") {
-                    Toggle("Built-in AdBlock (automatic)", isOn: $store.browserSettings.adBlockEnabled)
+                    Toggle("Ghostery AdBlock (EasyList + EasyPrivacy)", isOn: $store.browserSettings.adBlockEnabled)
                     Toggle("Custom AdBlock (your URL filters)", isOn: $store.browserSettings.customAdBlockEnabled)
-                    Text("Both lists run at the same time — built-in and custom rules are merged into one content-rule list. Allowlist entries below override both.").font(.caption).foregroundStyle(.secondary)
+                    Text("Filter EasyList + EasyPrivacy — daftar yang dipakai mesin Ghostery — dikonversi ke format content-blocker Apple (snapshot 22 Nov 2026, diperbarui lewat update aplikasi). Daftar Ghostery dan filter kustom jalan bersamaan; allowlist di bawah mengalahkan keduanya.").font(.caption).foregroundStyle(.secondary)
                     LabeledContent("Status", value: "Rules recompile when the browser reloads.")
                 }
                 Section("Custom block filters (one per line)") {
