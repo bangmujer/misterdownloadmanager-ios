@@ -856,6 +856,70 @@ final class BrowserSession: ObservableObject {
             completion(json["title"] as? String ?? "", json["html"] as? String ?? "")
         }
     }
+
+    /// Quote a Swift string as a JavaScript string literal (JSON encoding).
+    static func jsQuoted(_ s: String) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: [s], options: []),
+              let json = String(data: data, encoding: .utf8), json.count >= 2 else { return "\"\"" }
+        return String(json.dropFirst().dropLast())
+    }
+
+    /// Page translation via Google's in-page Translate element: the page
+    /// itself is translated in place, the URL stays the same, and the
+    /// browser's scripts keep working. Page text goes through Google's
+    /// servers. Reloading the tab restores the original page.
+    static func translateScript(lang: String) -> String {
+        """
+        (function() {
+          if (window.__mdmTranslateOn) return 'already';
+          window.__mdmTranslateOn = true;
+          var el = document.getElementById('google_translate_element');
+          if (!el) {
+            el = document.createElement('div');
+            el.id = 'google_translate_element';
+            el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;background:#fff;border-bottom:1px solid #ccc;padding:4px 8px;font:12px sans-serif;';
+            document.body.appendChild(el);
+          }
+          window.googleTranslateElementInit = function() {
+            try {
+              new google.translate.TranslateElement({pageLanguage: 'auto', includedLanguages: 'id,en,ms,zh-CN,zh-TW,ja,ko,ar,nl,es,fr,de,pt,ru,hi,th,vi', layout: google.translate.TranslateElement.InlineLayout.SIMPLE}, 'google_translate_element');
+            } catch (e) {}
+            var tries = 0;
+            var iv = setInterval(function() {
+              var combo = document.querySelector('.goog-te-combo');
+              if (combo) {
+                combo.value = '\(lang)';
+                try { combo.dispatchEvent(new Event('change')); } catch (e2) {}
+                clearInterval(iv);
+              } else if (++tries > 30) { clearInterval(iv); }
+            }, 300);
+          };
+          var s = document.createElement('script');
+          s.src = 'https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit';
+          document.head.appendChild(s);
+          return 'ok';
+        })()
+        """
+    }
+
+    func findInPage(query: String, backwards: Bool, completion: ((Bool) -> Void)? = nil) {
+        let q = Self.jsQuoted(query)
+        evaluateJS("window.find(\(q), false, \(backwards ? "true" : "false"), true)") { result, _ in
+            completion?(result as? Bool ?? false)
+        }
+    }
+
+    func countFindMatches(query: String, completion: @escaping (Int) -> Void) {
+        let q = Self.jsQuoted(query)
+        let script = "(function(q){ if(!q) return 0; var t=(document.body?document.body.innerText:'')||''; var n=0,i=0; var l=q.toLowerCase(); var s=t.toLowerCase(); while((i=s.indexOf(l,i))!==-1){n++; i+=l.length;} return n; })(\(q))"
+        evaluateJS(script) { result, _ in
+            completion((result as? NSNumber)?.intValue ?? 0)
+        }
+    }
+
+    func clearFindSelection() {
+        evaluateJS("try { window.getSelection().removeAllRanges(); } catch (e) {}")
+    }
 }
 
 // MARK: - Media audio session (background playback + PiP)
@@ -1152,6 +1216,12 @@ struct BrowserView: View {
     @State private var showingReader = false
     @State private var readerTitle = ""
     @State private var readerHTML = ""
+    @State private var showingTranslate = false
+    @State private var translatedTab: UUID?
+    @State private var showingFind = false
+    @State private var findQuery = ""
+    @State private var findCount = 0
+    @State private var showingReadingList = false
     @State private var aiContext: (title: String, url: String, text: String)?
     @State private var foundMedia: [URL] = []
     @State private var capturedNotice: String?
@@ -1170,7 +1240,10 @@ struct BrowserView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 76) }
-            floatingNavBar
+            VStack(spacing: 8) {
+                if showingFind { findBar }
+                floatingNavBar
+            }
         }
         .overlay(alignment: .top) {
             if let notice = capturedNotice {
@@ -1255,6 +1328,15 @@ struct BrowserView: View {
         .sheet(isPresented: $showingReader) {
             ReaderView(title: readerTitle, articleHTML: readerHTML)
         }
+        .sheet(isPresented: $showingTranslate) {
+            TranslateView { lang, name in
+                showingTranslate = false
+                openTranslate(lang: lang, name: name)
+            }
+        }
+        .sheet(isPresented: $showingReadingList) {
+            ReadingListView(session: session)
+        }
     }
 
     // MARK: Floating glass navbar (Safari-style: back / address pill / tabs / menu)
@@ -1293,6 +1375,17 @@ struct BrowserView: View {
                 Button { showingBookmarks = true } label: { Label("Bookmark", systemImage: "bookmark") }
                 Button { openReaderMode() } label: { Label("Mode Baca", systemImage: "book") }
                     .disabled(session.selectedTab?.showsStartPage == true)
+                if translatedTab == session.selectedTab?.id {
+                    Button { showOriginalPage() } label: { Label("Tampilkan halaman asli", systemImage: "arrow.uturn.backward") }
+                } else {
+                    Button { showingTranslate = true } label: { Label("Terjemahkan halaman…", systemImage: "translate") }
+                        .disabled(session.selectedTab?.showsStartPage == true)
+                }
+                Button { showingFind = true } label: { Label("Cari di halaman", systemImage: "magnifyingglass") }
+                    .disabled(session.selectedTab?.showsStartPage == true)
+                Button { addCurrentToReadingList() } label: { Label("Tambah ke Daftar Bacaan", systemImage: "text.badge.plus") }
+                    .disabled(session.selectedTab?.showsStartPage == true)
+                Button { showingReadingList = true } label: { Label("Daftar Bacaan", systemImage: "list.bullet") }
                 Button { showingClearData = true } label: { Label("Hapus Data Penjelajahan…", systemImage: "trash") }
                 if store.browserSettings.pictureInPicture {
                     Button { enterPictureInPicture() } label: { Label("Picture in Picture", systemImage: "pip.enter") }
@@ -1394,6 +1487,80 @@ struct BrowserView: View {
                 }
             }
         }
+    }
+
+    // MARK: Find in page, translate, reading list
+
+    private var findBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Cari di halaman…", text: $findQuery)
+                .autocapitalization(.none).autocorrectionDisabled()
+                .submitLabel(.search)
+                .onSubmit { runFind(backwards: false) }
+            if !findQuery.isEmpty {
+                Text(findCount == 0 ? "Tidak ada" : "\(findCount) hasil")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Button { findStep(backwards: true) } label: { Image(systemName: "chevron.up") }
+                .disabled(findQuery.isEmpty)
+            Button { findStep(backwards: false) } label: { Image(systemName: "chevron.down") }
+                .disabled(findQuery.isEmpty)
+            Button("Selesai") { closeFind() }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 12)
+        .task(id: findQuery) {
+            guard !findQuery.isEmpty else { findCount = 0; return }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            runFind(backwards: false)
+        }
+    }
+
+    private func runFind(backwards: Bool) {
+        let q = findQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { findCount = 0; return }
+        session.countFindMatches(query: q) { n in
+            DispatchQueue.main.async { findCount = n }
+        }
+        session.findInPage(query: q, backwards: backwards)
+    }
+
+    private func findStep(backwards: Bool) {
+        let q = findQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        session.findInPage(query: q, backwards: backwards)
+    }
+
+    private func closeFind() {
+        showingFind = false
+        findQuery = ""
+        findCount = 0
+        session.clearFindSelection()
+    }
+
+    private func openTranslate(lang: String, name: String) {
+        session.evaluateJS(BrowserSession.translateScript(lang: lang)) { _, _ in
+            DispatchQueue.main.async {
+                translatedTab = session.selectedID
+                capturedNotice = "Halaman diterjemahkan ke \(name). Muat ulang untuk kembali ke aslinya."
+            }
+        }
+    }
+
+    private func showOriginalPage() {
+        translatedTab = nil
+        session.reload()
+    }
+
+    private func addCurrentToReadingList() {
+        guard let tab = session.selectedTab, !tab.urlString.isEmpty,
+              let url = URL(string: tab.urlString), url.scheme != nil else { return }
+        let added = store.addReadingList(title: tab.displayTitle, urlString: tab.urlString)
+        capturedNotice = added ? "Ditambahkan ke daftar bacaan." : "Sudah ada di daftar bacaan."
     }
 
     private func enterPictureInPicture() {
@@ -1609,6 +1776,14 @@ struct BrowserHistoryEntry: Identifiable, Codable, Equatable {
     var title: String
     var urlString: String
     var date: Date = Date()
+}
+
+struct ReadingListItem: Identifiable, Codable, Equatable {
+    var id: UUID = UUID()
+    var title: String
+    var urlString: String
+    var date: Date = Date()
+    var read: Bool = false
 }
 
 struct HistoryView: View {
@@ -1952,6 +2127,111 @@ struct ReaderView: View {
         <style>body{font-family:-apple-system,Georgia,serif;font-size:\(fontSize)px;line-height:1.65;color:#1c1c1e;padding:20px 22px 40px;max-width:720px;margin:0 auto;word-wrap:break-word;} h1{font-size:1.4em;line-height:1.3;} img{max-width:100%;height:auto;} a{color:#007aff;} pre,code{white-space:pre-wrap;word-wrap:break-word;} @media (prefers-color-scheme: dark){body{color:#f2f2f7;background:#000;}}</style>
         </head><body><h1>\(safeTitle)</h1>\(articleHTML)</body></html>
         """
+    }
+}
+
+// MARK: - Translate + reading list
+
+struct TranslateView: View {
+    var onTranslate: (String, String) -> Void
+    @Environment(\.dismiss) var dismiss
+
+    static let languages: [(code: String, name: String)] = [
+        ("id", "Indonesia"), ("en", "English"), ("ms", "Melayu"),
+        ("zh-CN", "Mandarin (Sederhana)"), ("zh-TW", "Mandarin (Tradisional)"),
+        ("ja", "Jepang"), ("ko", "Korea"), ("ar", "Arab"),
+        ("nl", "Belanda"), ("es", "Spanyol"), ("fr", "Prancis"),
+        ("de", "Jerman"), ("pt", "Portugis"), ("ru", "Rusia"),
+        ("hi", "Hindi"), ("th", "Thailand"), ("vi", "Vietnam"),
+    ]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(Self.languages, id: \.code) { lang in
+                        Button { onTranslate(lang.code, lang.name) } label: {
+                            Text(lang.name)
+                        }
+                    }
+                }
+                Section {
+                    Text("Halaman diterjemahkan di tempat lewat Google Translate — URL-nya tetap sama. Teks halaman dikirim ke server Google untuk diterjemahkan. Muat ulang halaman untuk kembali ke bahasa aslinya. Sebagian halaman yang sangat interaktif mungkin hanya terterjemah sebagian.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Terjemahkan halaman")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Batal") { dismiss() } } }
+        }
+    }
+}
+
+struct ReadingListView: View {
+    @EnvironmentObject var store: DownloadStore
+    @ObservedObject var session: BrowserSession
+    @Environment(\.dismiss) var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if store.readingList.isEmpty {
+                    Text("Belum ada yang disimpan. Buka halaman apa pun, lalu ⋯ > Tambah ke Daftar Bacaan untuk membacanya nanti.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(store.readingList.reversed()) { item in
+                        Button {
+                            store.setReadingListRead(id: item.id, read: true)
+                            if let url = URL(string: item.urlString) { session.navigateSelected(to: url) }
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(item.read ? Color.clear : Color.blue)
+                                    .frame(width: 8, height: 8)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.title.isEmpty ? (URL(string: item.urlString)?.host ?? item.urlString) : item.title)
+                                        .lineLimit(1)
+                                    HStack(spacing: 6) {
+                                        Text(URL(string: item.urlString)?.host ?? item.urlString)
+                                        Text(Self.dateString(item.date))
+                                    }
+                                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) { store.removeReadingList(id: item.id) } label: {
+                                Label("Hapus", systemImage: "trash")
+                            }
+                        }
+                        .swipeActions(edge: .leading) {
+                            Button { store.setReadingListRead(id: item.id, read: !item.read) } label: {
+                                Label(item.read ? "Belum dibaca" : "Sudah dibaca", systemImage: item.read ? "circle" : "checkmark.circle")
+                            }
+                            .tint(.blue)
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Daftar Bacaan")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Tutup") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Hapus yang sudah dibaca", role: .destructive) { store.clearReadItems() }
+                        .disabled(!store.readingList.contains { $0.read })
+                }
+            }
+        }
+    }
+
+    static func dateString(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "id_ID")
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f.string(from: date)
     }
 }
 

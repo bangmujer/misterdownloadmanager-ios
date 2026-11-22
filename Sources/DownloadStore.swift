@@ -21,6 +21,7 @@ final class DownloadStore: ObservableObject {
     @Published var lastError: String?
     @Published var browserSettings = BrowserSettings()
     @Published var browserHistory: [BrowserHistoryEntry] = []
+    @Published var readingList: [ReadingListItem] = []
 
     private var activeTasks: [UUID: Task<Void, Never>] = [:]
     private var schedulerTimer: Timer?
@@ -85,10 +86,48 @@ final class DownloadStore: ObservableObject {
         saveBrowserHistory()
     }
 
+    // MARK: - Reading list
+
+    private var readingListURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("mdm-reading-list.json")
+    }
+    func saveReadingList() {
+        if let data = try? JSONEncoder().encode(readingList) {
+            try? data.write(to: readingListURL, options: .atomic)
+        }
+    }
+    private func loadReadingList() {
+        guard let data = try? Data(contentsOf: readingListURL),
+              let decoded = try? JSONDecoder().decode([ReadingListItem].self, from: data) else { return }
+        readingList = decoded
+    }
+    /// Returns false when the URL is already saved.
+    @discardableResult
+    func addReadingList(title: String, urlString: String) -> Bool {
+        guard !readingList.contains(where: { $0.urlString == urlString }) else { return false }
+        readingList.append(ReadingListItem(title: title, urlString: urlString))
+        saveReadingList()
+        return true
+    }
+    func removeReadingList(id: UUID) {
+        readingList.removeAll { $0.id == id }
+        saveReadingList()
+    }
+    func setReadingListRead(id: UUID, read: Bool) {
+        guard let idx = readingList.firstIndex(where: { $0.id == id }) else { return }
+        readingList[idx].read = read
+        saveReadingList()
+    }
+    func clearReadItems() {
+        readingList.removeAll { $0.read }
+        saveReadingList()
+    }
+
     init() {
         load()
         loadBrowserSettings()
         loadBrowserHistory()
+        loadReadingList()
         startTimers()
         if settings.autoResumeOnLaunch {
             for item in items where item.state == .downloading || item.state == .queued {

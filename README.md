@@ -30,6 +30,7 @@ Open it from the Downloads screen ("Kembali ke Download" in the ⋯ menu goes ba
 - **History, bookmarks, clear browsing data:** ⋯ > Riwayat (searchable, grouped by day, private tabs never recorded), ⋯ > Bookmark (list, edit, delete, plus import of the bookmark HTML file Safari/Chrome export on desktop — iOS does not let apps read their bookmarks directly), ⋯ > Hapus Data Penjelajahan (history, cookies, cache, all site data)
 - **Content settings:** block script popups (tapped links still open), link preview on long-press on/off, address detection (street addresses become links to Google Maps for routes and local info), Web Inspector (inspect pages from Safari on a Mac)
 - **Reader mode:** ⋯ > Mode Baca shows a clean article view with adjustable text size (best effort: works best on articles)
+- **Translate, find in page, reading list:** ⋯ > Terjemahkan halaman (in-place Google Translate, reload restores the original; page text goes through Google's servers), ⋯ > Cari di halaman (match count + next/previous), ⋯ > Daftar Bacaan (save pages for later, read/unread state, survives restarts)
 - **Ask AI ("Minta AI"):** send the current page (title, URL, text) to Gemini, ChatGPT or Claude via their public streaming APIs, or hand off to Muse on the web. API keys are entered in the app and stored only in the device Keychain — they are never written to settings files or sent anywhere else
 
 ## Honestly not ported
