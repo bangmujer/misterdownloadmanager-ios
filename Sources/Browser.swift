@@ -257,7 +257,7 @@ enum AdBlockRules {
             }
             attempts.append([(settings.adBlockEnabled ? builtin : []) + dynamic])
 
-            let store = WKContentRuleListStore.default()
+            let store = WKContentRuleListStore.default()!
             func loadChunk(_ rules: [[String: Any]], identifier: String, completion: @escaping (WKContentRuleList?) -> Void) {
                 store.lookUpContentRuleList(forIdentifier: identifier) { list, _ in
                     if let list { completion(list); return }
