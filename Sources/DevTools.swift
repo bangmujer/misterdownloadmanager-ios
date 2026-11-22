@@ -369,7 +369,7 @@ extension BrowserSession {
 
     func deleteCookie(_ cookie: HTTPCookie, completion: (() -> Void)? = nil) {
         guard let webView = webViews[selectedID] else { completion?(); return }
-        webView.configuration.websiteDataStore.httpCookieStore.deleteCookie(cookie) {
+        webView.configuration.websiteDataStore.httpCookieStore.delete(cookie) {
             DispatchQueue.main.async { completion?() }
         }
     }

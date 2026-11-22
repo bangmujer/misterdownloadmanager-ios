@@ -1893,7 +1893,7 @@ struct ClearDataView: View {
         var types: [String] = []
         if clearCookies { types.append(WKWebsiteDataTypeCookies) }
         if clearCache { types += [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache] }
-        if clearSiteData { types = WKWebsiteDataStore.allWebsiteDataTypes() }
+        if clearSiteData { types = Array(WKWebsiteDataStore.allWebsiteDataTypes()) }
         guard !types.isEmpty else {
             result = "Riwayat dihapus."
             return
