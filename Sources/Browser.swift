@@ -453,7 +453,7 @@ final class BrowserSession: ObservableObject {
         // tabs excluded) survive the app being closed or swiped out of
         // the app switcher, and reload when the browser opens again.
         if let saved = Self.loadSavedTabs(), !saved.tabs.isEmpty {
-            tabs = saved.tabs.map { s in
+            let restored: [BrowserTabState] = saved.tabs.map { s in
                 var t = BrowserTabState()
                 t.id = s.id
                 t.title = s.title
@@ -463,8 +463,9 @@ final class BrowserSession: ObservableObject {
                 if let url = URL(string: s.urlString), !s.urlString.isEmpty { t.pendingURL = url }
                 return t
             }
+            tabs = restored
             groups = saved.groups
-            selectedID = saved.tabs.contains { $0.id == saved.selectedID } ? saved.selectedID : tabs[0].id
+            selectedID = saved.tabs.contains { $0.id == saved.selectedID } ? saved.selectedID : restored[0].id
         } else {
             let firstTab = BrowserTabState()
             tabs = [firstTab]
