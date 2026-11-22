@@ -10,7 +10,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("Connection") {
-                    Stepper("Max connections per download: \(store.settings.maxConnections)", value: $store.settings.maxConnections, in: 1...16)
+                    Stepper("Max connections per download: \(store.settings.maxConnections)", value: $store.settings.maxConnections, in: 1...60)
                     Stepper("Max concurrent downloads: \(store.settings.maxConcurrentDownloads)", value: $store.settings.maxConcurrentDownloads, in: 1...5)
                     Stepper("Speed limit: \(store.settings.speedLimitKBps == 0 ? "Unlimited" : "\(store.settings.speedLimitKBps) KB/s")", value: $store.settings.speedLimitKBps, in: 0...100000, step: 100)
                     Toggle("Wi-Fi only (kill-switch approximation)", isOn: $store.settings.wifiOnly)

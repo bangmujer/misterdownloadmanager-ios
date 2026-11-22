@@ -337,7 +337,7 @@ final class DownloadStore: ObservableObject {
             }
 
             // Segmented download.
-            let connections = max(1, min(16, item.connections))
+            let connections = max(1, min(60, item.connections))
             var segments = item.segments
             if segments.isEmpty {
                 let chunk = total / Int64(connections)

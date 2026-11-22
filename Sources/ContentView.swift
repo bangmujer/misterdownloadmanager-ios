@@ -261,7 +261,7 @@ struct AddURLView: View {
                     Picker("Category", selection: $category) {
                         ForEach(DownloadCategory.allCases.filter { $0 != .all }) { Text($0.rawValue).tag($0) }
                     }
-                    Stepper("Connections: \(connections)", value: $connections, in: 1...16)
+                    Stepper("Connections: \(connections)", value: $connections, in: 1...60)
                     TextField("Referer (optional)", text: $referer)
                 }
                 Section("Checksum (optional)") {
