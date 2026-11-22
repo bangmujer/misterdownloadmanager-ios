@@ -13,8 +13,10 @@ Usage:
 
 Outputs (in Sources/Resources/, committed to the repo), chunked so no
 single list approaches WebKit's per-list rule limits:
-    ghostery-rules-1.json .. -3.json  network rules, ~40k per chunk
-    ghostery-rules-4.json              cosmetic (element-hiding) rules
+    ghostery-rules-1.json .. -6.json  network rules, ~20k per chunk
+    ghostery-rules-7.json              cosmetic (element-hiding) rules
+Chunks are kept near 20k rules (~2.4 MB JSON each) because the GitHub
+push path rejects single files above ~4 MB.
 Exception (@@) rules are duplicated at the end of every network chunk:
 WKContentRuleList's ignore-previous-rules only cancels earlier rules in
 the SAME list, so blocks-before-exceptions ordering per chunk is what
@@ -97,7 +99,7 @@ COSMETIC_SKIP_FRAGMENTS = (
     ":style(", ":remove(", ":upward(", ":has-text", "+js(", ">>>",
     ":nth-ancestor", ":watch-attr", ":remove-attr", ":remove-class",
 )
-CHUNK_SIZE = 40000
+CHUNK_SIZE = 20000
 
 
 def escape_regex(s):
@@ -339,7 +341,7 @@ def main():
         print(f"{path}: {len(network)} network, {len(cosmetics)} cosmetic")
         all_network.extend(network)
         all_cosmetic.extend(cosmetics)
-    all_cosmetic = dedupe(all_cosmetic)[:CHUNK_SIZE]
+    all_cosmetic = dedupe(all_cosmetic)
     # Blocks first, exceptions last, per ABP semantics: ignore-previous-rules
     # only cancels earlier rules in the same list.
     blocks = [r for r in all_network if r["action"]["type"] == "block"]

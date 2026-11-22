@@ -140,8 +140,8 @@ enum AdBlockRules {
     /// identifiers, so a refreshed snapshot recompiles instead of
     /// reusing a stale cached list.
     static let ghosterySnapshot = "2026-11-22"
-    static let ghosteryChunkCount = 4
-    static let ghosteryNetworkChunkCount = 3
+    static let ghosteryChunkCount = 7
+    static let ghosteryNetworkChunkCount = 6
 
     /// Built-in block patterns (domains/substrings). Only a last-resort
     /// fallback now: the bundled Ghostery lists carry the real blocking.
