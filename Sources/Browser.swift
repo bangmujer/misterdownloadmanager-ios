@@ -599,16 +599,17 @@ final class BrowserSession: ObservableObject {
     })()
     """
 
-    /// Floating in-page Picture in Picture button. WebKit only accepts
-    /// entering PiP in response to a real tap on the page, so evaluated
-    /// JavaScript from the native menu cannot do it reliably: the button
-    /// lives in the page itself, appears only while a sizeable video is
-    /// playing, and its tap calls webkitSetPresentationMode directly.
+    /// Picture in Picture button. WebKit only accepts entering PiP in
+    /// response to a real tap on the page, so evaluated JavaScript from
+    /// the native menu cannot do it reliably: the button lives in the
+    /// page itself. On YouTube it is inserted into the player's own
+    /// control bar, right before the fullscreen button; on other pages
+    /// it floats anchored to the video's top-right corner.
     static let pipButtonScript = """
     (function() {
       if (window.__mdmPiPButton) return;
       window.__mdmPiPButton = true;
-      var btn = null;
+      var btn = null, btnMode = '';
       function bestVideo() {
         var vids = document.querySelectorAll('video');
         var best = null, bestArea = 0, bestPlaying = null, bestPlayingArea = 0;
@@ -626,38 +627,89 @@ final class BrowserSession: ObservableObject {
       function inPiP(v) {
         try { return v.webkitPresentationMode === 'picture-in-picture'; } catch (e) { return false; }
       }
+      function enterPiP() {
+        var target = bestVideo();
+        if (!target) return;
+        try { target.removeAttribute('disablepictureinpicture'); } catch (e) {}
+        function attempt() {
+          try {
+            if (typeof target.webkitSetPresentationMode === 'function') {
+              target.webkitSetPresentationMode('picture-in-picture');
+              return true;
+            }
+          } catch (e2) {}
+          try { if (target.requestPictureInPicture) { var p = target.requestPictureInPicture(); if (p && p.catch) p.catch(function(){}); return true; } } catch (e3) {}
+          return false;
+        }
+        if (target.paused || target.ended) {
+          try { var pr = target.play(); if (pr && pr.catch) pr.catch(function(){}); } catch (e4) {}
+          setTimeout(function(){ attempt(); }, 500);
+        } else {
+          if (!attempt()) setTimeout(function(){ attempt(); }, 500);
+        }
+      }
+      function ytControls() {
+        var fs = document.querySelector('.ytp-fullscreen-button');
+        if (fs && fs.parentElement) return { bar: fs.parentElement, fsBtn: fs };
+        var rc = document.querySelector('.ytp-right-controls');
+        if (rc) return { bar: rc, fsBtn: null };
+        return null;
+      }
+      function createButton() {
+        var b = document.createElement('button');
+        b.setAttribute('aria-label', 'Picture in Picture');
+        b.setAttribute('title', 'Picture in Picture');
+        b.addEventListener('click', function(ev) {
+          ev.preventDefault(); ev.stopPropagation();
+          enterPiP();
+        });
+        return b;
+      }
+      function styleForChrome(b) {
+        b.className = 'ytp-button';
+        b.innerHTML = '<svg width="24" height="24" viewBox="0 0 24 24" fill="#fff"><path d="M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z"/></svg>';
+        b.style.cssText = 'display:flex;align-items:center;justify-content:center;background:transparent;border:0;padding:0;cursor:pointer;';
+      }
+      function styleForFloat(b) {
+        b.className = '';
+        b.textContent = 'PiP';
+        b.style.cssText = 'position:fixed;z-index:2147483647;padding:8px 14px;border:0;border-radius:999px;background:rgba(0,0,0,0.65);color:#fff;font:600 13px -apple-system,system-ui,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,0.35);';
+      }
       function refresh() {
-        if (document.webkitFullscreenElement) { if (btn) btn.style.display = 'none'; return; }
         var v = bestVideo();
-        if (v && !v.paused && !v.ended && !inPiP(v)) {
-          if (!btn) {
-            btn = document.createElement('button');
-            btn.textContent = 'PiP';
-            btn.setAttribute('aria-label', 'Picture in Picture');
-            btn.style.cssText = 'position:fixed;right:14px;bottom:96px;z-index:2147483647;padding:8px 14px;border:0;border-radius:999px;background:rgba(0,0,0,0.65);color:#fff;font:600 13px -apple-system,system-ui,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,0.35);';
-            btn.addEventListener('click', function(ev) {
-              ev.preventDefault(); ev.stopPropagation();
-              var target = bestVideo();
-              if (!target) return;
-              try { target.removeAttribute('disablepictureinpicture'); } catch (e2) {}
-              try {
-                if (typeof target.webkitSetPresentationMode === 'function') {
-                  target.webkitSetPresentationMode('picture-in-picture');
-                  return;
-                }
-              } catch (e3) {}
-              try { if (target.requestPictureInPicture) target.requestPictureInPicture(); } catch (e4) {}
-            });
-            document.documentElement.appendChild(btn);
+        var show = !!(v && !v.ended && !inPiP(v));
+        if (!show) { if (btn) btn.style.display = 'none'; return; }
+        var yt = ytControls();
+        if (yt) {
+          if (!btn || !btn.isConnected || btnMode !== 'chrome') {
+            btn = createButton();
+            styleForChrome(btn);
+            btnMode = 'chrome';
+          }
+          if (btn.parentNode !== yt.bar) {
+            if (yt.fsBtn) yt.bar.insertBefore(btn, yt.fsBtn);
+            else yt.bar.appendChild(btn);
           }
           btn.style.display = '';
-        } else if (btn) {
-          btn.style.display = 'none';
+        } else {
+          if (document.webkitFullscreenElement) { if (btn) btn.style.display = 'none'; return; }
+          if (!btn || !btn.isConnected || btnMode !== 'float') {
+            btn = createButton();
+            styleForFloat(btn);
+            btnMode = 'float';
+          }
+          if (btn.parentNode !== document.documentElement) document.documentElement.appendChild(btn);
+          var r = v.getBoundingClientRect();
+          btn.style.left = Math.max(8, r.right - 64) + 'px';
+          btn.style.top = Math.max(8, r.top + 10) + 'px';
+          btn.style.display = '';
         }
       }
       document.addEventListener('play', refresh, true);
       document.addEventListener('pause', refresh, true);
       document.addEventListener('webkitpresentationmodechanged', refresh, true);
+      window.addEventListener('scroll', refresh, true);
+      window.addEventListener('resize', refresh);
       setInterval(refresh, 1000);
       refresh();
     })()
