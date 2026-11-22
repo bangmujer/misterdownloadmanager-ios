@@ -7,7 +7,7 @@ options:
 packages:
   ZIPFoundation:
     url: https://github.com/weichsel/ZIPFoundation.git
-    version: 0.9.19
+    from: 0.9.19
 targets:
   MDM:
     type: application
@@ -18,11 +18,10 @@ targets:
     dependencies:
       - package: ZIPFoundation
         product: ZIPFoundation
-    info:
-      properties:
-        CFBundleURLTypes:
-          - CFBundleURLSchemes: [mdm]
-            CFBundleURLName: com.bangmujer.misterdownloadmanager
+    # NOTE: no `info:` block here — XcodeGen's info spec requires a `path`,
+    # and a properties-only block fails with: Decoding failed at "path":
+    # Nothing found. The mdm:// URL scheme is deferred until a real
+    # Info.plist is added; the generated Info.plist is used for now.
     settings:
       base:
         PRODUCT_NAME: "Mister Download Manager"
@@ -39,7 +38,6 @@ targets:
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         INFOPLIST_KEY_NSAllowsArbitraryLoads: YES
         INFOPLIST_KEY_UIBackgroundModes: "fetch"
-        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: YES
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: NO
