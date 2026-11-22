@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import WebKit
 
@@ -71,6 +72,10 @@ struct BrowserSettings: Codable {
     var homePage: String = "https://www.google.com"
     var desktopMode: Bool = false
     var searchEngine: String = "Google"
+    // Media: background playback (incl. YouTube) + Picture in Picture.
+    // Both default ON and can be switched off in settings.
+    var backgroundPlayback: Bool = true
+    var pictureInPicture: Bool = true
     var bookmarks: [BrowserBookmark] = BrowserBookmark.defaults
     // Ask AI: provider id ("Gemini", "ChatGPT", "Claude", "Muse") + model per provider.
     // API keys are NOT stored here — see KeychainHelper in BrowserAI.swift.
@@ -439,6 +444,14 @@ final class BrowserSession: ObservableObject {
                         source: DevToolsBridge.script,
                         injectionTime: .atDocumentStart,
                         forMainFrameOnly: true))
+                    // Background playback: keep the page "visible" so players
+                    // do not pause themselves when the app backgrounds.
+                    if settings.backgroundPlayback {
+                        ucc.addUserScript(WKUserScript(
+                            source: BrowserSession.backgroundPlaybackScript,
+                            injectionTime: .atDocumentStart,
+                            forMainFrameOnly: true))
+                    }
                     webView.customUserAgent = settings.desktopMode
                         ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
                         : nil
@@ -498,6 +511,76 @@ final class BrowserSession: ObservableObject {
         guard let webView = webViews[selectedID] else { completion?(nil, nil); return }
         webView.evaluateJavaScript(script, completionHandler: completion)
     }
+
+    // MARK: Background playback + Picture in Picture
+
+    /// Keeps the page looking "visible" to its own scripts so players
+    /// (notably YouTube) do not pause themselves when the app goes to the
+    /// background. Only installed while background playback is enabled.
+    static let backgroundPlaybackScript = """
+    (function() {
+      if (window.__mdmBgPlayback) return;
+      window.__mdmBgPlayback = true;
+      try {
+        Object.defineProperty(document, 'hidden', { get: function() { return false; }, configurable: true });
+        Object.defineProperty(document, 'visibilityState', { get: function() { return 'visible'; }, configurable: true });
+        Object.defineProperty(document, 'webkitHidden', { get: function() { return false; }, configurable: true });
+        Object.defineProperty(document, 'webkitVisibilityState', { get: function() { return 'visible'; }, configurable: true });
+      } catch (e) {}
+      try { document.hasFocus = function() { return true; }; } catch (e2) {}
+      document.addEventListener('visibilitychange', function(e) { e.stopImmediatePropagation(); }, true);
+      window.addEventListener('pagehide', function(e) { e.stopImmediatePropagation(); }, true);
+    })();
+    """
+
+    /// Enters Picture in Picture on the playing (or first) <video>.
+    static let pipScript = """
+    (function(){
+      var vids = Array.prototype.slice.call(document.querySelectorAll('video'));
+      if (!vids.length) return 'none';
+      var v = null;
+      for (var i = 0; i < vids.length; i++) { if (!vids[i].paused) { v = vids[i]; break; } }
+      if (!v) v = vids[0];
+      try {
+        if (typeof v.webkitSetPresentationMode === 'function' && v.webkitSupportsPresentationMode && v.webkitSupportsPresentationMode('picture-in-picture')) {
+          v.webkitSetPresentationMode('picture-in-picture');
+          return 'pip';
+        }
+      } catch (e) {}
+      try { if (v.requestPictureInPicture) { var p = v.requestPictureInPicture(); if (p && p.catch) p.catch(function(){}); return 'pip'; } } catch (e2) {}
+      return 'unsupported';
+    })()
+    """
+
+    func applyMediaPlaybackSettings(_ settings: BrowserSettings) {
+        MediaPlaybackAudio.apply(
+            backgroundPlayback: settings.backgroundPlayback,
+            pictureInPicture: settings.pictureInPicture)
+    }
+}
+
+// MARK: - Media audio session (background playback + PiP)
+//
+// WKWebView media only keeps playing after the app backgrounds when the
+// app holds the audio background mode (INFOPLIST_KEY_UIBackgroundModes)
+// AND the shared audio session is a playback session. WebKit respects
+// the app's session; .mixWithOthers keeps other apps' audio playing too
+// instead of hijacking it when the browser opens.
+
+enum MediaPlaybackAudio {
+    static func apply(backgroundPlayback: Bool, pictureInPicture: Bool) {
+        let audioSession = AVAudioSession.sharedInstance()
+        do {
+            if backgroundPlayback || pictureInPicture {
+                try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                try audioSession.setActive(true)
+            } else {
+                try audioSession.setActive(false, options: [.notifyOthersOnDeactivation])
+            }
+        } catch {
+            // Best-effort: foreground playback still works without it.
+        }
+    }
 }
 
 // MARK: - WKWebView wrapper
@@ -515,6 +598,7 @@ struct BrowserWebView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
+        config.allowsPictureInPictureMediaPlayback = settings.pictureInPicture
         if isIncognito {
             // Private tabs: nothing is persisted — separate process pool and
             // a non-persistent data store (no cookies, cache or history kept).
@@ -532,6 +616,14 @@ struct BrowserWebView: UIViewRepresentable {
             source: DevToolsBridge.script,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true))
+        // Background playback: keep the page "visible" so players do not
+        // pause themselves when the app backgrounds.
+        if settings.backgroundPlayback {
+            config.userContentController.addUserScript(WKUserScript(
+                source: BrowserSession.backgroundPlaybackScript,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true))
+        }
         session.webViews[tabID] = webView
         // Apply rules/scripts once created (compile is async; reload after apply).
         session.applyRulesAndScripts(settings: settings)
@@ -743,11 +835,13 @@ struct BrowserView: View {
                 DevToolsRouter.handle(session: session, tabID: tabID, body: body)
             }
             session.applyRulesAndScripts(settings: store.browserSettings)
+            session.applyMediaPlaybackSettings(store.browserSettings)
             if let tab = session.selectedTab { addressDraft = tab.host }
         }
         .onReceive(store.$browserSettings.dropFirst()) { settings in
             store.saveBrowserSettings()
             session.applyRulesAndScripts(settings: settings)
+            session.applyMediaPlaybackSettings(settings)
             session.reload()
         }
         .sheet(isPresented: $showingAdBlock) { AdBlockPanelView() }
@@ -819,6 +913,9 @@ struct BrowserView: View {
             Menu {
                 Button { dismiss() } label: { Label("Kembali ke Download", systemImage: "xmark.circle") }
                 Button { showingDevTools = true } label: { Label("DevTools (F12)", systemImage: "chevron.left.forwardslash.chevron.right") }
+                if store.browserSettings.pictureInPicture {
+                    Button { enterPictureInPicture() } label: { Label("Picture in Picture", systemImage: "pip.enter") }
+                }
                 Divider()
                 Button { session.goForward() } label: { Label("Maju", systemImage: "chevron.right") }
                     .disabled(session.selectedTab?.canGoForward != true)
@@ -902,6 +999,19 @@ struct BrowserView: View {
         store.saveBrowserSettings()
         session.applyRulesAndScripts(settings: store.browserSettings)
         session.reload()
+    }
+
+    private func enterPictureInPicture() {
+        session.evaluateJS(BrowserSession.pipScript) { result, _ in
+            let status = result as? String ?? ""
+            DispatchQueue.main.async {
+                if status == "none" {
+                    capturedNotice = "Tidak ada video di halaman ini."
+                } else if status == "unsupported" {
+                    capturedNotice = "Video ini tidak mendukung Picture in Picture."
+                }
+            }
+        }
     }
 
     private func addCurrentToBookmarks() {
@@ -1761,6 +1871,9 @@ struct AdBlockPanelView: View {
                         }
                     }
                     Toggle("Desktop site", isOn: $store.browserSettings.desktopMode)
+                    Toggle("Putar di background (termasuk YouTube)", isOn: $store.browserSettings.backgroundPlayback)
+                    Toggle("Picture in Picture", isOn: $store.browserSettings.pictureInPicture)
+                    Text("Background dan PiP butuh mode audio di sistem; mematikannya mengembalikan perilaku normal browser (media berhenti saat aplikasi ditutup). YouTube bisa mengubah pemutarnya sewaktu-waktu, jadi fitur ini mungkin perlu penyesuaian lagi.").font(.caption).foregroundStyle(.secondary)
                     TextField("Home page", text: $store.browserSettings.homePage)
                         .autocapitalization(.none).autocorrectionDisabled()
                 }

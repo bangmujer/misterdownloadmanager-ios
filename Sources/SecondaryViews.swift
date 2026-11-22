@@ -65,6 +65,8 @@ struct SettingsView: View {
                     Toggle("Built-in AdBlock (automatic)", isOn: $store.browserSettings.adBlockEnabled)
                     Toggle("Custom AdBlock (your URL filters)", isOn: $store.browserSettings.customAdBlockEnabled)
                     Toggle("Desktop site", isOn: $store.browserSettings.desktopMode)
+                    Toggle("Putar di background (termasuk YouTube)", isOn: $store.browserSettings.backgroundPlayback)
+                    Toggle("Picture in Picture", isOn: $store.browserSettings.pictureInPicture)
                     TextField("Home page", text: $store.browserSettings.homePage)
                         .autocapitalization(.none).autocorrectionDisabled()
                     Text("The in-app browser (Tools → Browser) runs both AdBlock lists together and captures downloads straight into the queue. Chrome extensions cannot run on iOS — the browser's extensions are JavaScript userscripts, managed in the browser's shield panel.").font(.caption).foregroundStyle(.secondary)
