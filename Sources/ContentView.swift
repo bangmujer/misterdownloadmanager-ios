@@ -43,7 +43,7 @@ struct ContentView: View {
     }
 
     private var sidebar: some View {
-        List(selection: Binding(get: { store.selectedCategory }, set: { store.selectedCategory = $0 })) {
+        List(selection: Binding<DownloadCategory?>(get: { store.selectedCategory }, set: { if let value = $0 { store.selectedCategory = value } })) {
             Section("Categories") {
                 ForEach(DownloadCategory.allCases) { cat in
                     Label {
@@ -99,7 +99,11 @@ struct ContentView: View {
     private var downloadList: some View {
         List {
             if store.filteredItems().isEmpty {
-                ContentUnavailableView("No downloads", systemImage: "arrow.down.circle", description: Text("Tap + to add a link, a torrent, or grab a video from a page."))
+                VStack(spacing: 8) {
+                    Image(systemName: "arrow.down.circle").font(.largeTitle).foregroundStyle(.secondary)
+                    Text("No downloads").font(.headline)
+                    Text("Tap + to add a link, a torrent, or grab a video from a page.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }.frame(maxWidth: .infinity).padding()
             }
             ForEach(store.filteredItems()) { item in
                 NavigationLink(value: item.id) {

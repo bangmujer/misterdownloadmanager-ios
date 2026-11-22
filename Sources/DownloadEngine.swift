@@ -102,17 +102,19 @@ enum DownloadEngine {
         config.allowsCellularAccess = !settings.wifiOnly
         if settings.proxyEnabled, !settings.proxyHost.isEmpty {
             var proxy: [AnyHashable: Any] = [:]
+            // kCFNetworkProxies* constants are macOS-only; use the raw CFNetwork
+            // proxy-dictionary string keys, which work on iOS too.
             if settings.proxyType.uppercased() == "SOCKS" {
-                proxy[kCFNetworkProxiesSOCKSEnable as String] = true
-                proxy[kCFNetworkProxiesSOCKSProxy as String] = settings.proxyHost
-                proxy[kCFNetworkProxiesSOCKSPort as String] = settings.proxyPort
+                proxy["SOCKSEnable"] = true
+                proxy["SOCKSProxy"] = settings.proxyHost
+                proxy["SOCKSPort"] = settings.proxyPort
             } else {
-                proxy[kCFNetworkProxiesHTTPEnable as String] = true
-                proxy[kCFNetworkProxiesHTTPProxy as String] = settings.proxyHost
-                proxy[kCFNetworkProxiesHTTPPort as String] = settings.proxyPort
-                proxy[kCFNetworkProxiesHTTPSEnable as String] = true
-                proxy[kCFNetworkProxiesHTTPSProxy as String] = settings.proxyHost
-                proxy[kCFNetworkProxiesHTTPSPort as String] = settings.proxyPort
+                proxy["HTTPEnable"] = true
+                proxy["HTTPProxy"] = settings.proxyHost
+                proxy["HTTPPort"] = settings.proxyPort
+                proxy["HTTPSEnable"] = true
+                proxy["HTTPSProxy"] = settings.proxyHost
+                proxy["HTTPSPort"] = settings.proxyPort
             }
             config.connectionProxyDictionary = proxy
         }

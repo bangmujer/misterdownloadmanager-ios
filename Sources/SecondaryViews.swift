@@ -86,7 +86,11 @@ struct DownloadedFilesView: View {
         NavigationStack {
             List {
                 if store.downloadedFiles().isEmpty {
-                    ContentUnavailableView("No files yet", systemImage: "folder", description: Text("Completed downloads appear here."))
+                    VStack(spacing: 8) {
+                        Image(systemName: "folder").font(.largeTitle).foregroundStyle(.secondary)
+                        Text("No files yet").font(.headline)
+                        Text("Completed downloads appear here.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    }.frame(maxWidth: .infinity).padding()
                 }
                 ForEach(store.downloadedFiles(), id: \.self) { url in
                     HStack {
@@ -106,7 +110,6 @@ struct DownloadedFilesView: View {
                 }
             }
             .navigationTitle("Downloaded Files")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { } }.hidden() }
             .quickLookPreview($previewURL)
             .alert("Rename file", isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })) {
                 TextField("New name", text: $renameText)

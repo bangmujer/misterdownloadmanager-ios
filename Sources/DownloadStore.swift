@@ -98,7 +98,7 @@ final class DownloadStore: ObservableObject {
         }
         let name = fileName?.isEmpty == false ? fileName! : (url.lastPathComponent.isEmpty || url.lastPathComponent == "/" ? "download" : url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent)
         let cat = category ?? DownloadCategory.from(fileName: name, mime: nil)
-        var item = DownloadItem(url: trimmed, fileName: name, category: cat, state: settings.startPaused ? .paused : .queued, connections: connections ?? settings.maxConnections, checksumType: checksumType, checksumValue: checksumValue, referer: referer, site: url.host)
+        var item = DownloadItem(url: trimmed, fileName: name, category: cat, state: settings.startPaused ? .paused : .queued, connections: connections ?? settings.maxConnections, referer: referer, userAgent: settings.userAgent, checksumType: checksumType, checksumValue: checksumValue, site: url.host)
         item.userAgent = settings.userAgent
         items.insert(item, at: 0)
         save()
@@ -205,7 +205,8 @@ final class DownloadStore: ObservableObject {
                 let existing = (try? FileManager.default.attributesOfItem(atPath: partURL.path)[.size] as? Int64) ?? 0
                 let range: ClosedRange<Int64>? = existing > 0 ? existing...(item.totalBytes ?? existing) : nil
                 // If we already have the full file, skip straight to finishing.
-                if let total, existing >= total {
+                // (guard-bound `total` is not in scope inside the guard's else block.)
+                if let totalBytes = item.totalBytes, existing >= totalBytes {
                     try await finishDownload(id: id, partURL: partURL)
                     return
                 }

@@ -89,7 +89,7 @@ enum TorrentClient {
         let infoHash = Data(Insecure.SHA1.hash(data: infoBytes))
         var parser = BencodeParser(data: data)
         let top = try parser.parse()
-        guard case .dict(let root) = top, case .dict(let info) = info["info"] else { throw NSError(domain: "MDMTorrent", code: 0, userInfo: [NSLocalizedDescriptionKey: "Struktur .torrent rusak."]) }
+        guard case .dict(let root) = top, case .dict(let info) = root["info"] else { throw NSError(domain: "MDMTorrent", code: 0, userInfo: [NSLocalizedDescriptionKey: "Struktur .torrent rusak."]) }
         func str(_ v: BValue?) -> String? { guard case .bytes(let d) = v else { return nil }; return String(data: d, encoding: .utf8) }
         func int(_ v: BValue?) -> Int64? { guard case .int(let i) = v else { return nil }; return i }
         let name = str(info["name"]) ?? "torrent"
