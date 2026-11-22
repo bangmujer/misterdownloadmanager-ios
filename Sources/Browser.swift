@@ -150,7 +150,11 @@ final class BrowserSession: ObservableObject {
     var onDownloadCaptured: ((URL) -> Void)?
     var onMediaFound: (([URL]) -> Void)?
 
-    init() { selectedID = tabs[0].id }
+    init() {
+        let firstTab = BrowserTabState()
+        tabs = [firstTab]
+        selectedID = firstTab.id
+    }
 
     var selectedTab: BrowserTabState? { tabs.first { $0.id == selectedID } }
     var selectedIndex: Int { max(0, tabs.firstIndex { $0.id == selectedID } ?? 0) }
