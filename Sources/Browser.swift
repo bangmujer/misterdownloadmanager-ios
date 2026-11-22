@@ -254,6 +254,12 @@ final class BrowserSession: ObservableObject {
     var webViews: [UUID: WKWebView] = [:]
     var onDownloadCaptured: ((URL) -> Void)?
     var onMediaFound: (([URL]) -> Void)?
+    // DevTools (F12) state, fed by the in-page bridge script.
+    var onDevToolsMessage: ((UUID, [String: Any]) -> Void)?
+    @Published var consoleLogs: [UUID: [DevConsoleEntry]] = [:]
+    @Published var networkLogs: [UUID: [DevNetworkEntry]] = [:]
+    @Published var inspectedElement: DevElementInfo?
+    @Published var isInspecting: Bool = false
 
     init() {
         let firstTab = BrowserTabState()
@@ -427,6 +433,12 @@ final class BrowserSession: ObservableObject {
                             injectionTime: ext.atDocumentStart ? .atDocumentStart : .atDocumentEnd,
                             forMainFrameOnly: true))
                     }
+                    // DevTools bridge: always present so console / fetch / XHR
+                    // activity can be shown in the F12 panel.
+                    ucc.addUserScript(WKUserScript(
+                        source: DevToolsBridge.script,
+                        injectionTime: .atDocumentStart,
+                        forMainFrameOnly: true))
                     webView.customUserAgent = settings.desktopMode
                         ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
                         : nil
@@ -455,6 +467,37 @@ final class BrowserSession: ObservableObject {
             self?.onMediaFound?(strings.compactMap(URL.init(string:)))
         }
     }
+
+    // MARK: DevTools logging
+
+    func recordNavigation(tabID: UUID, url: URL, status: Int) {
+        let entry = DevNetworkEntry(method: "NAV", url: url.absoluteString, status: status, durationMs: 0, source: "navigation")
+        networkLogs[tabID, default: []].append(entry)
+        trimNetworkLog(tabID)
+    }
+
+    func appendConsole(tabID: UUID, level: String, text: String) {
+        consoleLogs[tabID, default: []].append(DevConsoleEntry(level: level, text: text))
+        if consoleLogs[tabID]?.count ?? 0 > 300 {
+            consoleLogs[tabID]?.removeFirst((consoleLogs[tabID]?.count ?? 0) - 300)
+        }
+    }
+
+    func appendNetwork(tabID: UUID, entry: DevNetworkEntry) {
+        networkLogs[tabID, default: []].append(entry)
+        trimNetworkLog(tabID)
+    }
+
+    private func trimNetworkLog(_ tabID: UUID) {
+        if networkLogs[tabID]?.count ?? 0 > 300 {
+            networkLogs[tabID]?.removeFirst((networkLogs[tabID]?.count ?? 0) - 300)
+        }
+    }
+
+    func evaluateJS(_ script: String, completion: ((Any?, Error?) -> Void)? = nil) {
+        guard let webView = webViews[selectedID] else { completion?(nil, nil); return }
+        webView.evaluateJavaScript(script, completionHandler: completion)
+    }
 }
 
 // MARK: - WKWebView wrapper
@@ -482,6 +525,13 @@ struct BrowserWebView: UIViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
+        // DevTools bridge: message handler + document-start script, added
+        // before the first load so early console/network activity is seen.
+        config.userContentController.add(context.coordinator, name: "mdmDevTools")
+        config.userContentController.addUserScript(WKUserScript(
+            source: DevToolsBridge.script,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true))
         session.webViews[tabID] = webView
         // Apply rules/scripts once created (compile is async; reload after apply).
         session.applyRulesAndScripts(settings: settings)
@@ -504,7 +554,7 @@ struct BrowserWebView: UIViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         let session: BrowserSession
         let tabID: UUID
         private var observations: [NSKeyValueObservation] = []
@@ -545,6 +595,10 @@ struct BrowserWebView: UIViewRepresentable {
             }
             let mime = navigationResponse.response.mimeType ?? ""
             if let url = navigationResponse.response.url {
+                let status = (navigationResponse.response as? HTTPURLResponse)?.statusCode ?? 0
+                session.recordNavigation(tabID: tabID, url: url, status: status)
+            }
+            if let url = navigationResponse.response.url {
                 let ext = url.pathExtension.lowercased()
                 if downloadExts.contains(ext) && !mime.hasPrefix("text/html") { isDownload = true }
             }
@@ -581,6 +635,13 @@ struct BrowserWebView: UIViewRepresentable {
                      for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
             if let url = navigationAction.request.url { webView.load(URLRequest(url: url)) }
             return nil
+        }
+
+        // DevTools bridge messages (console / fetch / XHR / inspect picks).
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "mdmDevTools",
+                  let body = message.body as? [String: Any] else { return }
+            session.onDevToolsMessage?(tabID, body)
         }
     }
 }
@@ -637,6 +698,7 @@ struct BrowserView: View {
     @State private var showingMedia = false
     @State private var showingOverview = false
     @State private var showingAI = false
+    @State private var showingDevTools = false
     @State private var aiContext: (title: String, url: String, text: String)?
     @State private var foundMedia: [URL] = []
     @State private var capturedNotice: String?
@@ -675,6 +737,10 @@ struct BrowserView: View {
                 foundMedia = urls
                 showingMedia = urls.isEmpty ? false : true
                 if urls.isEmpty { capturedNotice = "No playable media found on this page." }
+            }
+            session.onDevToolsMessage = { [weak session] tabID, body in
+                guard let session else { return }
+                DevToolsRouter.handle(session: session, tabID: tabID, body: body)
             }
             session.applyRulesAndScripts(settings: store.browserSettings)
             if let tab = session.selectedTab { addressDraft = tab.host }
@@ -716,6 +782,9 @@ struct BrowserView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingDevTools) {
+            DevToolsView(session: session)
+        }
     }
 
     // MARK: Floating glass navbar (Safari-style: back / address pill / tabs / menu)
@@ -749,6 +818,7 @@ struct BrowserView: View {
 
             Menu {
                 Button { dismiss() } label: { Label("Kembali ke Download", systemImage: "xmark.circle") }
+                Button { showingDevTools = true } label: { Label("DevTools (F12)", systemImage: "chevron.left.forwardslash.chevron.right") }
                 Divider()
                 Button { session.goForward() } label: { Label("Maju", systemImage: "chevron.right") }
                     .disabled(session.selectedTab?.canGoForward != true)
