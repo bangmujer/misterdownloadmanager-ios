@@ -545,13 +545,25 @@ final class BrowserSession: ObservableObject {
     /// video carried a disablepictureinpicture attribute (removed first).
     static let pipScript = """
     (function(){
-      var out = {status: 'unknown', videos: 0, paused: true, hasFn: false, supports: null, disabled: false};
+      var out = {status: 'unknown', videos: 0, paused: true, hasFn: false, supports: null, disabled: false, area: 0};
       var vids = Array.prototype.slice.call(document.querySelectorAll('video'));
       out.videos = vids.length;
       if (!vids.length) { out.status = 'none'; return JSON.stringify(out); }
-      var v = null;
-      for (var i = 0; i < vids.length; i++) { if (!vids[i].paused) { v = vids[i]; break; } }
-      if (!v) v = vids[0];
+      // Pick the video the user is actually watching: the largest visible
+      // one, preferring one that is playing. YouTube pages can carry
+      // extra hidden/preview <video> elements; taking the first one
+      // often targets a video the user never sees.
+      function areaOf(el) {
+        try { var r = el.getBoundingClientRect(); return Math.max(0, r.width) * Math.max(0, r.height); } catch (e) { return 0; }
+      }
+      var best = null, bestArea = -1, bestPlaying = null, bestPlayingArea = -1;
+      for (var i = 0; i < vids.length; i++) {
+        var a = areaOf(vids[i]);
+        if (a > bestArea) { bestArea = a; best = vids[i]; }
+        if (!vids[i].paused && a > bestPlayingArea) { bestPlayingArea = a; bestPlaying = vids[i]; }
+      }
+      var v = bestPlaying || best;
+      out.area = Math.round(bestPlaying ? bestPlayingArea : bestArea);
       out.paused = !!v.paused;
       out.hasFn = (typeof v.webkitSetPresentationMode === 'function');
       try { out.disabled = v.hasAttribute('disablepictureinpicture'); v.removeAttribute('disablepictureinpicture'); } catch (e) {}
@@ -567,7 +579,9 @@ final class BrowserSession: ObservableObject {
         return false;
       }
       if (!v.paused) {
-        out.status = attempt() ? 'pip' : 'unsupported';
+        var ok = attempt();
+        if (!ok) setTimeout(function(){ attempt(); }, 500);
+        out.status = ok ? 'pip' : 'unsupported';
         return JSON.stringify(out);
       }
       try { var pr = v.play(); if (pr && pr.catch) pr.catch(function(){}); } catch (e5) {}
@@ -1072,7 +1086,9 @@ struct BrowserView: View {
                     var supportsText = "-"
                     if let b = json["supports"] as? Bool { supportsText = b ? "ya" : "tidak" }
                     let paused = (json["paused"] as? Bool) ?? false
-                    capturedNotice = "PiP tidak didukung video ini (webkit: \(hasFn ? "ya" : "tidak"), support: \(supportsText), paused: \(paused ? "ya" : "tidak"))."
+                    let videos = json["videos"] as? Int ?? 0
+                    let modes = (Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []).joined(separator: ",")
+                    capturedNotice = "PiP gagal (video: \(videos), webkit: \(hasFn ? "ya" : "tidak"), support: \(supportsText), paused: \(paused ? "ya" : "tidak"), mode: \(modes.isEmpty ? "tidak ada" : modes))."
                 default:
                     capturedNotice = "PiP: status tidak dikenal."
                 }
