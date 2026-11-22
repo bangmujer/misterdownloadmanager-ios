@@ -6,14 +6,15 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
+    @State private var cacheBytes: Int64 = 0
+    @State private var cacheMessage: String?
     var body: some View {
         NavigationStack {
             Form {
-                Section("Connection") {
+                Section("Download") {
                     Stepper("Max connections per download: \(store.settings.maxConnections)", value: $store.settings.maxConnections, in: 1...60)
                     Stepper("Max concurrent downloads: \(store.settings.maxConcurrentDownloads)", value: $store.settings.maxConcurrentDownloads, in: 1...5)
                     Stepper("Speed limit: \(store.settings.speedLimitKBps == 0 ? "Unlimited" : "\(store.settings.speedLimitKBps) KB/s")", value: $store.settings.speedLimitKBps, in: 0...100000, step: 100)
-                    Toggle("Wi-Fi only (kill-switch approximation)", isOn: $store.settings.wifiOnly)
                     Toggle("Start downloads paused", isOn: $store.settings.startPaused)
                     Toggle("Auto-resume on launch", isOn: $store.settings.autoResumeOnLaunch)
                     TextField("User-Agent", text: $store.settings.userAgent)
@@ -25,6 +26,18 @@ struct SettingsView: View {
                     Stepper("Stop: \(store.settings.schedulerStopHour):\(String(format: "%02d", store.settings.schedulerStopMinute))", value: $store.settings.schedulerStopHour, in: 0...23)
                     Text("iOS cannot wake the phone or shut it down like the desktop scheduler. The window only gates starting/pausing while the app runs, and background downloads are limited by iOS.").font(.caption).foregroundStyle(.secondary)
                 }
+                Section("Penyimpanan") {
+                    LabeledContent("Cache download", value: formatBytes(cacheBytes))
+                    Button("Hapus Cache") {
+                        let freed = store.clearDownloadCache()
+                        cacheBytes = store.downloadCacheSize()
+                        cacheMessage = freed > 0 ? "Cache dibersihkan, \(formatBytes(freed)) dibebaskan." : "Tidak ada cache yang perlu dibersihkan."
+                    }
+                    if let cacheMessage {
+                        Text(cacheMessage).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("Menghapus sisa file sementara (.part dan potongan segmen) dari download yang sudah dihapus atau selesai. File .part milik download yang masih antre, jeda, atau gagal dipertahankan agar bisa dilanjutkan.").font(.caption).foregroundStyle(.secondary)
+                }
                 Section("Debrid — your own keys") {
                     SecureField("Real-Debrid API key", text: $store.settings.realDebridKey)
                     SecureField("AllDebrid API key", text: $store.settings.allDebridKey)
@@ -33,7 +46,8 @@ struct SettingsView: View {
                     SecureField("Mega-Debrid token", text: $store.settings.megaDebridKey)
                     Text("Keys stay in this app's settings file on this device. Debrid is experimental in the desktop app too.").font(.caption).foregroundStyle(.secondary)
                 }
-                Section("Proxy & DNS") {
+                Section("Jaringan") {
+                    Toggle("Wi-Fi only (kill-switch approximation)", isOn: $store.settings.wifiOnly)
                     Toggle("Use proxy", isOn: $store.settings.proxyEnabled)
                     Picker("Proxy type", selection: $store.settings.proxyType) { Text("HTTP").tag("HTTP"); Text("SOCKS").tag("SOCKS") }
                     TextField("Proxy host", text: $store.settings.proxyHost)
@@ -61,21 +75,34 @@ struct SettingsView: View {
                     if let addr = store.remoteAddress { LabeledContent("Address", value: addr) }
                     Text("Plain HTTP on trusted home Wi-Fi only, while the app is in the foreground. The desktop remote uses HTTPS pairing; that pairing flow is not ported.").font(.caption).foregroundStyle(.secondary)
                 }
-                Section("Browser & AdBlock") {
+                Section("Browser — Umum") {
+                    Picker("Search engine", selection: $store.browserSettings.searchEngine) {
+                        ForEach(SearchEngine.all, id: \.self) { engine in
+                            Text(engine).tag(engine)
+                        }
+                    }
+                    Toggle("Desktop site", isOn: $store.browserSettings.desktopMode)
+                    TextField("Home page", text: $store.browserSettings.homePage)
+                        .autocapitalization(.none).autocorrectionDisabled()
+                }
+                Section("Browser — AdBlock") {
                     Toggle("Ghostery AdBlock (EasyList + EasyPrivacy)", isOn: $store.browserSettings.adBlockEnabled)
                     Toggle("Custom AdBlock (your URL filters)", isOn: $store.browserSettings.customAdBlockEnabled)
-                    Toggle("Desktop site", isOn: $store.browserSettings.desktopMode)
+                    Text("Filter kustom dan allowlist diatur di panel perisai di dalam browser. The in-app browser runs both AdBlock lists together and captures downloads straight into the queue.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Browser — Media") {
                     Toggle("Putar di background (termasuk YouTube)", isOn: $store.browserSettings.backgroundPlayback)
                     Toggle("Picture in Picture", isOn: $store.browserSettings.pictureInPicture)
+                    Text("Background dan PiP butuh mode audio di sistem; mematikannya mengembalikan perilaku normal browser (media berhenti saat aplikasi ditutup).").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Browser — Konten") {
                     Toggle("Blokir popup", isOn: $store.browserSettings.blockPopups)
                     Toggle("Tampilkan pratinjau link (tekan lama)", isOn: $store.browserSettings.linkPreview)
                     Toggle("Deteksi alamat (buka di Google Maps)", isOn: $store.browserSettings.detectAddresses)
                     Toggle("Web Inspector (periksa dari Safari di Mac)", isOn: $store.browserSettings.webInspector)
                     Toggle("Lewati timer tunggu (countdown download)", isOn: $store.browserSettings.skipTimers)
                     Toggle("Tanpa redirect (klik download langsung ke link final)", isOn: $store.browserSettings.noRedirects)
-                    TextField("Home page", text: $store.browserSettings.homePage)
-                        .autocapitalization(.none).autocorrectionDisabled()
-                    Text("The in-app browser (Tools → Browser) runs both AdBlock lists together and captures downloads straight into the queue. Chrome extensions cannot run on iOS — the browser's extensions are JavaScript userscripts, managed in the browser's shield panel.").font(.caption).foregroundStyle(.secondary)
+                    Text("Blokir popup menahan jendela yang dibuka script (window.open); tautan yang diketuk tetap dibuka. Lewati timer mempercepat hitung mundur di halaman download sampai 50x dan mengaktifkan tombol download yang dikunci timer; timer yang ditegakkan server dan verifikasi manusia (mis. Cloudflare) tidak bisa dilewati. Tanpa redirect membuat klik tombol download langsung membuka link finalnya dan membuang popup ke situs lain; popup login/pembayaran yang sah bisa ikut tertahan, matikan kalau perlu.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("About & honest limits") {
                     Text("Mister Download Manager — iOS port. Original: github.com/anefzaoui/misterdownloadmanager, GPL-3.0, Rust/egui desktop app for Windows/Mac/Linux. This SwiftUI reimplementation keeps the download engine ideas (segmentation, resume, categories, queues, scheduler window, debrid, video grabber, torrent metadata, remote control) within iOS sandbox limits.")
@@ -87,6 +114,7 @@ struct SettingsView: View {
             }
             .navigationTitle("Options")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { store.save(); dismiss() } } }
+            .onAppear { cacheBytes = store.downloadCacheSize() }
             .onReceive(store.$settings.dropFirst()) { _ in store.save() }
             .onReceive(store.$browserSettings.dropFirst()) { _ in store.saveBrowserSettings() }
         }

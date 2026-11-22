@@ -4,7 +4,10 @@ SwiftUI reimplementation of [anefzaoui/misterdownloadmanager](https://github.com
 
 ## Download manager
 
-- Segmented HTTP/HTTPS downloads (up to 16 connections), resume, per-segment progress bars, speed limiting, retry
+- Segmented HTTP/HTTPS downloads (up to 60 connections), resume, per-segment progress bars, speed limiting, automatic retry of dropped connections (3 attempts per segment/stream, resuming from bytes already on disk instead of restarting)
+- Smart filenames: the server's declared filename (Content-Disposition header, or the `response-content-disposition` of presigned/CDN URLs such as GitHub release assets) wins over opaque URL ids, and token suffixes appended to the download path (`app.apk&k=…`) are stripped so the saved name ends at the extension
+- Download cache management (Options → Penyimpanan): shows temp-data size and clears orphaned `.part`/segment files from deleted or finished downloads, while keeping resume data of queued/paused/failed downloads
+- Settings grouped by feature: Download, Network, Queue & Scheduler, Storage, Debrid, Browser (General / AdBlock / Media / Content), Appearance, Notifications, Remote control
 - Categories (Video, Music, Documents, Compressed, Programs, Images, Torrents, Other), search, queue / start-all / pause-all
 - Add URL with probe (size, resume support, MIME, filename), referer, checksum verification (MD5/SHA1/SHA256)
 - Scheduler window (gates starting/pausing while the app runs; iOS cannot wake or shut down the phone)

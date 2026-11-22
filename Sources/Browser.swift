@@ -3232,11 +3232,13 @@ struct AdBlockPanelView: View {
                         }
                     }
                     Toggle("Desktop site", isOn: $store.browserSettings.desktopMode)
+                    TextField("Home page", text: $store.browserSettings.homePage)
+                        .autocapitalization(.none).autocorrectionDisabled()
+                }
+                Section("Media") {
                     Toggle("Putar di background (termasuk YouTube)", isOn: $store.browserSettings.backgroundPlayback)
                     Toggle("Picture in Picture", isOn: $store.browserSettings.pictureInPicture)
                     Text("Background dan PiP butuh mode audio di sistem; mematikannya mengembalikan perilaku normal browser (media berhenti saat aplikasi ditutup). YouTube bisa mengubah pemutarnya sewaktu-waktu, jadi fitur ini mungkin perlu penyesuaian lagi.").font(.caption).foregroundStyle(.secondary)
-                    TextField("Home page", text: $store.browserSettings.homePage)
-                        .autocapitalization(.none).autocorrectionDisabled()
                 }
                 Section("Konten") {
                     Toggle("Blokir popup", isOn: $store.browserSettings.blockPopups)

@@ -291,6 +291,75 @@ final class DownloadStore: ObservableObject {
     }
     func activeDownloadsCount() -> Int { items.filter { $0.state == .downloading }.count }
 
+    // MARK: - Cache
+    /// Bytes held by temporary download data: segment files plus
+    /// `.part` files waiting to resume.
+    func downloadCacheSize() -> Int64 {
+        var total: Int64 = 0
+        let fm = FileManager.default
+        if let files = try? fm.contentsOfDirectory(at: segmentsDir, includingPropertiesForKeys: nil) {
+            for f in files { total += (try? fm.attributesOfItem(atPath: f.path)[.size] as? Int64) ?? 0 }
+        }
+        if let files = try? fm.contentsOfDirectory(at: downloadsDir, includingPropertiesForKeys: nil) {
+            for f in files where f.pathExtension == "part" {
+                total += (try? fm.attributesOfItem(atPath: f.path)[.size] as? Int64) ?? 0
+            }
+        }
+        return total
+    }
+
+    /// Deletes orphaned temp files: `.part` files with no live (not
+    /// completed) download of that name, and segment files whose
+    /// download id is gone. `.part` files of queued/paused/failed
+    /// downloads are kept so they can still resume. Also drops the
+    /// shared URL cache. Returns bytes freed.
+    @discardableResult
+    func clearDownloadCache() -> Int64 {
+        let fm = FileManager.default
+        var freed: Int64 = 0
+        let livePartNames = Set(items.filter { $0.state != .completed }.map { $0.fileName + ".part" })
+        if let files = try? fm.contentsOfDirectory(at: downloadsDir, includingPropertiesForKeys: nil) {
+            for f in files where f.pathExtension == "part" && !livePartNames.contains(f.lastPathComponent) {
+                freed += (try? fm.attributesOfItem(atPath: f.path)[.size] as? Int64) ?? 0
+                try? fm.removeItem(at: f)
+            }
+        }
+        let liveIDs = Set(items.filter { $0.state != .completed }.map { $0.id.uuidString })
+        if let files = try? fm.contentsOfDirectory(at: segmentsDir, includingPropertiesForKeys: nil) {
+            for f in files {
+                let base = f.lastPathComponent.components(separatedBy: ".seg").first ?? ""
+                if !liveIDs.contains(base) {
+                    freed += (try? fm.attributesOfItem(atPath: f.path)[.size] as? Int64) ?? 0
+                    try? fm.removeItem(at: f)
+                }
+            }
+        }
+        URLCache.shared.removeAllCachedResponses()
+        return freed
+    }
+
+    /// Runs `body` up to 3 times, retrying transient failures: a
+    /// connection dropped by the server mid-download must not kill
+    /// the whole download. Cancellation is never retried. Static so
+    /// segment tasks can use it without capturing the store.
+    static func withDownloadRetry(_ body: () async throws -> Void) async throws {
+        var attempt = 0
+        while true {
+            try Task.checkCancellation()
+            attempt += 1
+            do {
+                try await body()
+                return
+            } catch {
+                if Task.isCancelled { throw error }
+                let nsErr = error as NSError
+                if nsErr.domain == NSURLErrorDomain && nsErr.code == NSURLErrorCancelled { throw error }
+                if attempt >= 3 { throw error }
+                try await Task.sleep(nanoseconds: 500_000_000 * UInt64(attempt))
+            }
+        }
+    }
+
     // MARK: - Engine orchestration
     private func runDownload(id: UUID) async {
         guard var item = item(id) else { return }
@@ -353,15 +422,22 @@ final class DownloadStore: ObservableObject {
             guard let total = item.totalBytes, item.resumeSupported, total > 1_048_576 else {
                 // Single-stream download straight into a .part file (resumable when the server allows it).
                 let partURL = downloadsDir.appendingPathComponent(item.fileName + ".part")
-                let existing = (try? FileManager.default.attributesOfItem(atPath: partURL.path)[.size] as? Int64) ?? 0
-                let range: ClosedRange<Int64>? = existing > 0 ? existing...(item.totalBytes ?? existing) : nil
                 // If we already have the full file, skip straight to finishing.
                 // (guard-bound `total` is not in scope inside the guard's else block.)
-                if let totalBytes = item.totalBytes, existing >= totalBytes {
-                    try await finishDownload(id: id, partURL: partURL)
-                    return
+                if let totalBytes = item.totalBytes {
+                    let existing = (try? FileManager.default.attributesOfItem(atPath: partURL.path)[.size] as? Int64) ?? 0
+                    if existing >= totalBytes {
+                        try await finishDownload(id: id, partURL: partURL)
+                        return
+                    }
                 }
-                _ = try await DownloadEngine.downloadRange(url: url, range: range, destination: partURL, settings: settingsSnapshot, referer: item.referer, limiter: limiter, onBytes: { counter.add($0) })
+                // Retry a dropped connection from the on-disk size, so a
+                // retry resumes instead of duplicating bytes.
+                try await DownloadStore.withDownloadRetry {
+                    let existingNow = (try? FileManager.default.attributesOfItem(atPath: partURL.path)[.size] as? Int64) ?? 0
+                    let retryRange: ClosedRange<Int64>? = existingNow > 0 ? existingNow...(item.totalBytes ?? existingNow) : nil
+                    _ = try await DownloadEngine.downloadRange(url: url, range: retryRange, destination: partURL, settings: settingsSnapshot, referer: item.referer, limiter: limiter, onBytes: { counter.add($0) })
+                }
                 try await finishDownload(id: id, partURL: partURL)
                 return
             }
@@ -393,11 +469,15 @@ final class DownloadStore: ObservableObject {
             try await withThrowingTaskGroup(of: Void.self) { group in
                 for seg in segments where !seg.isDone {
                     group.addTask {
-                        try Task.checkCancellation()
                         let segURL = segDir.appendingPathComponent(seg.fileName)
-                        let from = seg.start + seg.downloaded
-                        guard from <= seg.end else { return }
-                        _ = try await DownloadEngine.downloadRange(url: downloadURL, range: from...seg.end, destination: segURL, settings: settingsSnapshot, referer: refererValue, limiter: limiter, onBytes: { counter.add($0) })
+                        // A segment whose connection drops is retried from
+                        // its on-disk size instead of failing the download.
+                        try await DownloadStore.withDownloadRetry {
+                            let size = (try? FileManager.default.attributesOfItem(atPath: segURL.path)[.size] as? Int64) ?? 0
+                            let from = seg.start + min(size, seg.end - seg.start + 1)
+                            guard from <= seg.end else { return }
+                            _ = try await DownloadEngine.downloadRange(url: downloadURL, range: from...seg.end, destination: segURL, settings: settingsSnapshot, referer: refererValue, limiter: limiter, onBytes: { counter.add($0) })
+                        }
                     }
                 }
                 try await group.waitForAll()
