@@ -84,6 +84,10 @@ struct BrowserSettings: Codable {
     var webInspector: Bool = true
     // Timer bypass: speed up countdown waits on download pages.
     var skipTimers: Bool = false
+    // Freeze timers: on these hosts, page timers (setTimeout/setInterval)
+    // never fire — countdown/trial timers stop instead of speeding up.
+    // Hosts, e.g. ["example.com"]; subdomains match too.
+    var freezeTimerHosts: [String] = []
     // No-redirect mode: download clicks go straight to the final link,
     // cross-host popups are dropped.
     var noRedirects: Bool = true
@@ -399,6 +403,24 @@ struct BrowserTabState: Identifiable {
     }
 }
 
+/// A persisted open tab: identity, title, URL, group and recency only.
+/// Runtime state (progress, loading, back/forward history) is not
+/// saved — a restored tab reloads its URL fresh when the browser
+/// opens again. Private (incognito) tabs are never persisted.
+struct SavedBrowserTab: Codable {
+    var id: UUID
+    var title: String
+    var urlString: String
+    var groupID: UUID?
+    var lastUsedAt: Date
+}
+
+struct SavedBrowserSession: Codable {
+    var tabs: [SavedBrowserTab]
+    var groups: [BrowserTabGroup]
+    var selectedID: UUID
+}
+
 final class BrowserSession: ObservableObject {
     @Published var tabs: [BrowserTabState] = [BrowserTabState()]
     @Published var selectedID: UUID
@@ -427,9 +449,52 @@ final class BrowserSession: ObservableObject {
     @Published var isInspecting: Bool = false
 
     init() {
-        let firstTab = BrowserTabState()
-        tabs = [firstTab]
-        selectedID = firstTab.id
+        // Restore the previous session: open tabs (URLs only, private
+        // tabs excluded) survive the app being closed or swiped out of
+        // the app switcher, and reload when the browser opens again.
+        if let saved = Self.loadSavedTabs(), !saved.tabs.isEmpty {
+            tabs = saved.tabs.map { s in
+                var t = BrowserTabState()
+                t.id = s.id
+                t.title = s.title
+                t.urlString = s.urlString
+                t.groupID = s.groupID
+                t.lastUsedAt = s.lastUsedAt
+                if let url = URL(string: s.urlString), !s.urlString.isEmpty { t.pendingURL = url }
+                return t
+            }
+            groups = saved.groups
+            selectedID = saved.tabs.contains { $0.id == saved.selectedID } ? saved.selectedID : tabs[0].id
+        } else {
+            let firstTab = BrowserTabState()
+            tabs = [firstTab]
+            selectedID = firstTab.id
+        }
+    }
+
+    // MARK: Session persistence (open tabs survive app restarts)
+
+    private static var tabsFileURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("mdm-browser-tabs.json")
+    }
+
+    func saveTabs() {
+        let saved = SavedBrowserSession(
+            tabs: tabs.filter { !$0.isIncognito }.map {
+                SavedBrowserTab(id: $0.id, title: $0.title, urlString: $0.urlString,
+                                groupID: $0.groupID, lastUsedAt: $0.lastUsedAt)
+            },
+            groups: groups, selectedID: selectedID)
+        if let data = try? JSONEncoder().encode(saved) {
+            try? data.write(to: Self.tabsFileURL, options: .atomic)
+        }
+    }
+
+    private static func loadSavedTabs() -> SavedBrowserSession? {
+        guard let data = try? Data(contentsOf: tabsFileURL),
+              let saved = try? JSONDecoder().decode(SavedBrowserSession.self, from: data) else { return nil }
+        return saved
     }
 
     var selectedTab: BrowserTabState? { tabs.first { $0.id == selectedID } }
@@ -448,6 +513,7 @@ final class BrowserSession: ObservableObject {
         guard tabs.contains(where: { $0.id == id }) else { return }
         selectedID = id
         touchTab(id)
+        saveTabs()
     }
 
     func touchTab(_ id: UUID) {
@@ -461,6 +527,7 @@ final class BrowserSession: ObservableObject {
         if let url { tab.pendingURL = url; tab.urlString = url.absoluteString }
         tabs.append(tab)
         selectedID = tab.id
+        saveTabs()
     }
 
     func closeTab(_ id: UUID) {
@@ -481,6 +548,7 @@ final class BrowserSession: ObservableObject {
         loadingPending.removeValue(forKey: id)
         lastHistoryURL.removeValue(forKey: id)
         if selectedID == id { selectedID = tabs[max(0, idx - 1)].id }
+        saveTabs()
     }
 
     /// Replace a tab with a fresh start-page tab (new identity, so the old
@@ -499,6 +567,7 @@ final class BrowserSession: ObservableObject {
         fresh.isIncognito = incognito
         tabs[idx] = fresh
         selectedID = fresh.id
+        saveTabs()
     }
 
     func navigateSelected(to url: URL) {
@@ -506,6 +575,7 @@ final class BrowserSession: ObservableObject {
         tabs[idx].pendingURL = url
         tabs[idx].urlString = url.absoluteString
         tabs[idx].lastUsedAt = Date()
+        saveTabs()
     }
 
     /// A requested navigation has started (committed, finished or failed):
@@ -536,6 +606,8 @@ final class BrowserSession: ObservableObject {
         if let isLoading { tabs[idx].isLoading = isLoading }
         if let canGoBack { tabs[idx].canGoBack = canGoBack }
         if let canGoForward { tabs[idx].canGoForward = canGoForward }
+        // A committed URL is the moment a tab becomes worth restoring.
+        if urlString != nil { saveTabs() }
     }
 
     func goBack() { webViews[selectedID]?.goBack() }
@@ -551,6 +623,7 @@ final class BrowserSession: ObservableObject {
         let group = BrowserTabGroup(name: name, colorHex: colorHex, tabIDs: tabIDs)
         groups.append(group)
         for tabID in tabIDs { setTabGroup(tabID, groupID: group.id) }
+        saveTabs()
         return group
     }
 
@@ -565,11 +638,13 @@ final class BrowserSession: ObservableObject {
            !groups[gi].tabIDs.contains(tabID) {
             groups[gi].tabIDs.append(tabID)
         }
+        saveTabs()
     }
 
     func deleteGroup(_ id: UUID) {
         for idx in tabs.indices where tabs[idx].groupID == id { tabs[idx].groupID = nil }
         groups.removeAll { $0.id == id }
+        saveTabs()
     }
 
     func renameGroup(_ id: UUID, name: String, colorHex: Int) {
@@ -660,6 +735,13 @@ final class BrowserSession: ObservableObject {
                     if settings.skipTimers {
                         ucc.addUserScript(WKUserScript(
                             source: BrowserSession.timerBypassScript,
+                            injectionTime: .atDocumentStart,
+                            forMainFrameOnly: true))
+                    }
+                    // Freeze timers on the listed hosts only.
+                    if !settings.freezeTimerHosts.isEmpty {
+                        ucc.addUserScript(WKUserScript(
+                            source: BrowserSession.timerFreezeScript(hosts: settings.freezeTimerHosts),
                             injectionTime: .atDocumentStart,
                             forMainFrameOnly: true))
                     }
@@ -1043,6 +1125,35 @@ final class BrowserSession: ObservableObject {
       }
     })()
     """
+
+    /// Freeze timers, per site (opt-in, document start, before page
+    /// scripts run): on a listed host, setTimeout/setInterval are
+    /// replaced with no-ops, so countdown and trial timers never tick
+    /// and the page's timer-driven state stays frozen. Unlike the
+    /// timer bypass (which speeds timers up), this stops them. It only
+    /// affects timers in page JavaScript — waits enforced server-side
+    /// or by human-verification gates are untouched, and pages whose
+    /// own rendering depends on timers may look stuck; that is the
+    /// point of freezing, so it is per-site only.
+    static func timerFreezeScript(hosts: [String]) -> String {
+        // Only hostname-safe characters reach the script, so a crafted
+        // host entry cannot break out of the embedded JS string.
+        let list = hosts.map { host in
+            "\"" + host.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" } + "\""
+        }.joined(separator: ",")
+        return """
+        (function() {
+          if (window.__mdmTimerFreeze) return;
+          var HOSTS = [\(list)];
+          var host = (location.hostname || '').toLowerCase();
+          var match = HOSTS.some(function(h) { return host === h || host.endsWith('.' + h); });
+          if (!match) return;
+          window.__mdmTimerFreeze = true;
+          window.setTimeout = function() { return 0; };
+          window.setInterval = function() { return 0; };
+        })()
+        """
+    }
 
     /// No-redirect mode: clicks on download links go straight to the
     /// link's own URL instead of through the page's click handlers
@@ -1598,6 +1709,7 @@ func resolveAddressInput(_ raw: String, engine: String) -> URL? {
 struct BrowserView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
+    @Environment(\.scenePhase) var scenePhase
     @StateObject private var session = BrowserSession()
     @State private var addressDraft = ""
     @State private var isEditingAddress = false
@@ -1677,6 +1789,12 @@ struct BrowserView: View {
             session.applyMediaPlaybackSettings(settings)
             session.reload()
         }
+        // Save open tabs when the app backgrounds or the browser
+        // closes, so a swipe-out-of-recents restart restores them.
+        .onChange(of: scenePhase) { phase in
+            if phase != .active { session.saveTabs() }
+        }
+        .onDisappear { session.saveTabs() }
         .sheet(isPresented: $showingAdBlock) { AdBlockPanelView() }
         .sheet(isPresented: $showingMedia) {
             NavigationStack {
@@ -1794,6 +1912,11 @@ struct BrowserView: View {
                 }
                 Button { session.findMedia() } label: { Label("Cari video & media", systemImage: "play.rectangle.on.rectangle") }
                 Button { addCurrentToBookmarks() } label: { Label("Tambah ke favorit", systemImage: "star") }
+                if let host = session.selectedTab?.host, !host.isEmpty {
+                    Button { toggleFreezeTimer(for: host) } label: {
+                        Label(store.browserSettings.freezeTimerHosts.contains(host) ? "Freeze timer di situs ini ✓" : "Freeze timer di situs ini", systemImage: "timer")
+                    }
+                }
                 Button { openAI() } label: { Label("Minta AI", systemImage: "sparkles") }
                 Button { toggleDesktopMode() } label: {
                     Label(store.browserSettings.desktopMode ? "Mode desktop ✓" : "Mode desktop", systemImage: "desktopcomputer")
@@ -1873,6 +1996,19 @@ struct BrowserView: View {
         store.saveBrowserSettings()
         session.applyRulesAndScripts(settings: store.browserSettings)
         session.reload()
+    }
+
+    /// Per-site freeze-timer toggle: adds/removes the current host.
+    /// Settings changes re-apply rules and reload via onReceive.
+    private func toggleFreezeTimer(for host: String) {
+        var hosts = store.browserSettings.freezeTimerHosts
+        if hosts.contains(host) {
+            hosts.removeAll { $0 == host }
+        } else {
+            hosts.append(host)
+        }
+        store.browserSettings.freezeTimerHosts = hosts
+        store.saveBrowserSettings()
     }
 
     private func openReaderMode() {
@@ -3263,6 +3399,7 @@ struct AdBlockPanelView: View {
     @State private var showingScriptImporter = false
     @State private var scriptImportResult: String?
     @State private var exceptionText = ""
+    @State private var freezeText = ""
 
     var body: some View {
         NavigationStack {
@@ -3364,6 +3501,17 @@ struct AdBlockPanelView: View {
                     Toggle("Tarik ke bawah untuk reload", isOn: $store.browserSettings.gesturePullRefresh)
                     Toggle("Tekan lama tombol reload = hard reload", isOn: $store.browserSettings.gestureHardReload)
                     Text("Setiap gestur bisa dimatikan sendiri-sendiri, seperti di Reynard. Hard reload memuat ulang halaman tanpa cache (reloadFromOrigin).").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Freeze timer (per situs)") {
+                    TextEditor(text: Binding(
+                        get: { freezeText },
+                        set: { newValue in
+                            freezeText = newValue
+                            store.browserSettings.freezeTimerHosts = newValue.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+                        }))
+                        .frame(minHeight: 60)
+                        .onAppear { freezeText = store.browserSettings.freezeTimerHosts.joined(separator: "\n") }
+                    Text("Satu host per baris (mis. contoh.com, subdomain ikut). Di situs yang terdaftar, timer halaman (setTimeout/setInterval) dibekukan total — hitung mundur dan timer trial berhenti, bukan dipercepat. Beda dengan \"Lewati timer\" yang mempercepat semua situs. Timer yang ditegakkan server tidak bisa dibekukan. Bisa juga diaktifkan cepat dari menu ⋯ di situs yang sedang dibuka.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Minta AI di browser") {
                     Picker("AI", selection: $store.browserSettings.aiProvider) {
