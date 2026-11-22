@@ -196,6 +196,20 @@ final class DownloadStore: ObservableObject {
         return trimmed.isEmpty ? "download" : trimmed
     }
 
+    /// Presigned/CDN URLs (e.g. GitHub release assets served from
+    /// objects.githubusercontent.com) carry the real filename only in
+    /// the `response-content-disposition` query item; the path itself
+    /// is an opaque id. Returns the declared filename, if any.
+    static func fileNameFromResponseDispositionQuery(_ url: URL) -> String? {
+        guard let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else { return nil }
+        for item in items where item.name == "response-content-disposition" {
+            if let value = item.value, let name = DownloadEngine.fileNameFromContentDisposition(value) {
+                return name
+            }
+        }
+        return nil
+    }
+
     // MARK: - Adding
     @discardableResult
     func addItem(urlString: String, fileName: String? = nil, category: DownloadCategory? = nil, connections: Int? = nil, checksumType: String? = nil, checksumValue: String? = nil, referer: String? = nil, startNow: Bool = true) -> DownloadItem? {
@@ -211,8 +225,14 @@ final class DownloadStore: ObservableObject {
             item.errorMessage = "Magnet: tempel di Tambah Torrent untuk mulai mengunduh via peer."
             items.insert(item, at: 0); save(); return item
         }
-        let rawName = fileName?.isEmpty == false ? fileName! : (url.lastPathComponent.isEmpty || url.lastPathComponent == "/" ? "download" : url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent)
-        let name = DownloadStore.cleanFileName(rawName)
+        let explicitName = fileName?.isEmpty == false ? fileName! : nil
+        let rawName = explicitName ?? (url.lastPathComponent.isEmpty || url.lastPathComponent == "/" ? "download" : url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent)
+        var name = DownloadStore.cleanFileName(rawName)
+        // The server-declared filename in the URL beats a guessed path
+        // name (opaque CDN ids), but never a name the user typed.
+        if explicitName == nil, let cdName = DownloadStore.fileNameFromResponseDispositionQuery(url) {
+            name = DownloadStore.cleanFileName(cdName)
+        }
         let cat = category ?? DownloadCategory.from(fileName: name, mime: nil)
         var item = DownloadItem(url: trimmed, fileName: name, category: cat, state: settings.startPaused ? .paused : .queued, connections: connections ?? settings.maxConnections, referer: referer, userAgent: settings.userAgent, checksumType: checksumType, checksumValue: checksumValue, site: url.host)
         item.userAgent = settings.userAgent
@@ -312,7 +332,17 @@ final class DownloadStore: ObservableObject {
                         // Content-Disposition filename when the URL gave
                         // us nothing usable.
                         $0.fileName = DownloadStore.cleanFileName($0.fileName)
-                        if let fn = probe.fileName, $0.fileName == "download" || $0.fileName.isEmpty { $0.fileName = DownloadStore.cleanFileName(fn) }
+                        if let fn = probe.fileName {
+                            let cdName = DownloadStore.cleanFileName(fn)
+                            // The server's declared filename wins when the
+                            // URL gave us nothing usable (a bare id with
+                            // no extension, e.g. a CDN object id) or
+                            // nothing at all.
+                            let currentExt = ($0.fileName as NSString).pathExtension
+                            if $0.fileName == "download" || $0.fileName.isEmpty || currentExt.isEmpty {
+                                $0.fileName = cdName
+                            }
+                        }
                         $0.mimeType = probe.mimeType
                         $0.category = DownloadCategory.from(fileName: $0.fileName, mime: probe.mimeType)
                         $0.url = probe.finalURL.absoluteString
