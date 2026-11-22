@@ -46,6 +46,15 @@ struct ContentView: View {
 
     private var sidebar: some View {
         List(selection: Binding<DownloadCategory?>(get: { store.selectedCategory }, set: { if let value = $0 { store.selectedCategory = value } })) {
+            HStack(spacing: 10) {
+                Image("Logo").resizable().aspectRatio(contentMode: .fill)
+                    .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 10))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Mister Download Manager").font(.headline).lineLimit(1)
+                    Text("iOS port · GPL-3.0").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .listRowBackground(Color.clear)
             Section("Categories") {
                 ForEach(DownloadCategory.allCases) { cat in
                     Label {
