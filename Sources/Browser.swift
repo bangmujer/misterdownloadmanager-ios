@@ -87,6 +87,18 @@ struct BrowserSettings: Codable {
     // No-redirect mode: download clicks go straight to the final link,
     // cross-host popups are dropped.
     var noRedirects: Bool = true
+    // Reynard/Firefox-style privacy, adapted to WebKit (no jailbreak):
+    // Enhanced Tracking Protection level: "off" | "standard" | "strict".
+    var trackingProtection: String = "standard"
+    // Firefox HTTPS-Only mode: upgrade http:// main-frame navigations
+    // to https:// (local/LAN hosts are left alone).
+    var httpsOnly: Bool = false
+    // Hosts exempt from tracking protection / blocking.
+    var siteExceptions: [String] = []
+    // Browser gestures (Reynard lets each gesture be toggled individually).
+    var gestureEdgeSwipe: Bool = true
+    var gesturePullRefresh: Bool = true
+    var gestureHardReload: Bool = true
     var bookmarks: [BrowserBookmark] = BrowserBookmark.defaults
     // Ask AI: provider id ("Gemini", "ChatGPT", "Claude", "Muse") + model per provider.
     // API keys are NOT stored here — see KeychainHelper in BrowserAI.swift.
@@ -160,6 +172,22 @@ enum AdBlockRules {
         "doubleclick.net", "ads.yahoo.com", "advertising.com",
     ]
 
+    /// Well-known tracker/analytics domains, blocked only as
+    /// third-party loads when tracking protection is "strict"
+    /// (Firefox Strict mode behaviour, adapted to content rules).
+    static let strictTrackerDomains: [String] = [
+        "google-analytics.com", "googletagmanager.com", "gstatic.com",
+        "facebook.net", "facebook.com/tr", "connect.facebook.net",
+        "scorecardresearch.com", "quantserve.com", "hotjar.com",
+        "mixpanel.com", "segment.io", "segment.com", "amplitude.com",
+        "newrelic.com", "nr-data.net", "fullstory.com", "crazyegg.com",
+        "matomo.cloud", "piwik.pro", "yandex.ru/metrika",
+        "doubleclick.net", "googlesyndication.com", "adservice.google.com",
+        "bat.bing.com", "clarity.ms", "tiktok.com", "snapchat.com",
+        "linkedin.com/px", "twitter.com/i", "pinterest.com",
+        "criteo.com", "taboola.com", "outbrain.com",
+    ]
+
     static func escapeRegex(_ s: String) -> String {
         let specials = "\\.^$|?*+()[]{}"
         return s.map { specials.contains($0) ? "\\\($0)" : String($0) }.joined()
@@ -201,8 +229,27 @@ enum AdBlockRules {
                 if let r = regex(for: line) { rules.append(blockRule(pattern: r)) }
             }
         }
+        // Strict tracking protection: block known trackers, but only
+        // when loaded by another site (load-type third-party), so a
+        // site's own first-party scripts keep working.
+        if settings.trackingProtection == "strict" {
+            for domain in strictTrackerDomains {
+                let pattern = ".*://([^/]*\\.)?" + escapeRegex(domain) + "([/?#].*)?$"
+                rules.append(["trigger": ["url-filter": pattern, "load-type": ["third-party"],
+                                          "resource-type": ["script", "image", "xmlhttprequest", "media", "font", "websocket"]],
+                              "action": ["type": "block"]])
+            }
+        }
         for line in settings.customAllowFilters {
             if let r = regex(for: line) { rules.append(allowRule(pattern: r)) }
+        }
+        // Per-site exceptions (allowlist, last so they win): a bare host
+        // matches that host and its subdomains only.
+        for host in settings.siteExceptions {
+            let h = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !h.isEmpty else { continue }
+            let pattern = ".*://([^/]*\\.)?" + escapeRegex(h) + "([/?#].*)?$"
+            rules.append(allowRule(pattern: pattern))
         }
         return rules
     }
@@ -494,6 +541,7 @@ final class BrowserSession: ObservableObject {
     func goBack() { webViews[selectedID]?.goBack() }
     func goForward() { webViews[selectedID]?.goForward() }
     func reload() { webViews[selectedID]?.reload() }
+    func hardReload() { webViews[selectedID]?.reloadFromOrigin() }
     func stop() { webViews[selectedID]?.stopLoading() }
 
     // MARK: Groups
@@ -1258,11 +1306,13 @@ struct BrowserWebView: UIViewRepresentable {
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
-        webView.allowsBackForwardNavigationGestures = true
-        // Pull down from the top to reload, Safari-style.
-        let refreshControl = UIRefreshControl()
-        refreshControl.addTarget(context.coordinator, action: #selector(Coordinator.didPullToRefresh(_:)), for: .valueChanged)
-        webView.scrollView.refreshControl = refreshControl
+        webView.allowsBackForwardNavigationGestures = settings.gestureEdgeSwipe
+        // Pull down from the top to reload, Safari-style (toggleable).
+        if settings.gesturePullRefresh {
+            let refreshControl = UIRefreshControl()
+            refreshControl.addTarget(context.coordinator, action: #selector(Coordinator.didPullToRefresh(_:)), for: .valueChanged)
+            webView.scrollView.refreshControl = refreshControl
+        }
         // DevTools bridge: message handler + document-start script, added
         // before the first load so early console/network activity is seen.
         config.userContentController.add(context.coordinator, name: "mdmDevTools")
@@ -1292,6 +1342,17 @@ struct BrowserWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        // Gesture toggles apply live (Reynard-style individual toggles).
+        webView.allowsBackForwardNavigationGestures = settings.gestureEdgeSwipe
+        if settings.gesturePullRefresh {
+            if webView.scrollView.refreshControl == nil {
+                let refreshControl = UIRefreshControl()
+                refreshControl.addTarget(context.coordinator, action: #selector(Coordinator.didPullToRefresh(_:)), for: .valueChanged)
+                webView.scrollView.refreshControl = refreshControl
+            }
+        } else {
+            webView.scrollView.refreshControl = nil
+        }
         guard let tab = session.tabs.first(where: { $0.id == tabID }),
               let pending = tab.pendingURL else { return }
         // Issue each pending URL exactly once. Comparing webView.url
@@ -1371,6 +1432,18 @@ struct BrowserWebView: UIViewRepresentable {
             downloadExtensions.contains(url.pathExtension.lowercased())
         }
 
+        /// Local/LAN hosts are exempt from HTTPS-Only upgrades.
+        private static func isLocalHost(_ url: URL) -> Bool {
+            guard let host = url.host?.lowercased() else { return false }
+            if host == "localhost" || host.hasSuffix(".local") { return true }
+            if host.hasPrefix("127.") || host.hasPrefix("10.") || host.hasPrefix("192.168.") { return true }
+            if host.hasPrefix("172.") {
+                let second = host.split(separator: ".").dropFirst().first.flatMap { Int($0) } ?? -1
+                if (16...31).contains(second) { return true }
+            }
+            return false
+        }
+
         // Download capture: attachment responses and non-web files go to the MDM queue.
         func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
                      decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
@@ -1414,6 +1487,21 @@ struct BrowserWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            // HTTPS-Only mode (Firefox): upgrade http:// main-frame
+            // navigations to https://; local/LAN hosts are exempt.
+            if session.latestSettings.httpsOnly,
+               let url = navigationAction.request.url,
+               url.scheme == "http",
+               navigationAction.targetFrame?.isMainFrame == true,
+               !Self.isLocalHost(url) {
+                var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+                comps?.scheme = "https"
+                if let https = comps?.url {
+                    decisionHandler(.cancel)
+                    webView.load(URLRequest(url: https))
+                    return
+                }
+            }
             // No-redirect mode: script-opened windows (window.open,
             // popups) to another host are dropped outright instead of
             // taking over this tab; file URLs still load so download
@@ -1745,6 +1833,10 @@ struct BrowserView: View {
                 Button { session.stop() } label: { Image(systemName: "xmark") }
             } else {
                 Button { session.reload() } label: { Image(systemName: "arrow.clockwise") }
+                    .onLongPressGesture {
+                        // Reynard-style hard reload (long-press reload).
+                        if store.browserSettings.gestureHardReload { session.hardReload() }
+                    }
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
@@ -3170,6 +3262,7 @@ struct AdBlockPanelView: View {
     @State private var editingExtension: BrowserExtension?
     @State private var showingScriptImporter = false
     @State private var scriptImportResult: String?
+    @State private var exceptionText = ""
 
     var body: some View {
         NavigationStack {
@@ -3248,6 +3341,29 @@ struct AdBlockPanelView: View {
                     Toggle("Lewati timer tunggu (countdown download)", isOn: $store.browserSettings.skipTimers)
                     Toggle("Tanpa redirect (klik download langsung ke link final)", isOn: $store.browserSettings.noRedirects)
                     Text("Blokir popup menahan jendela yang dibuka script (window.open); tautan yang diketuk tetap dibuka. Deteksi alamat menandai alamat jalan di halaman menjadi tautan ke Google Maps untuk rute dan info lokal. Web Inspector memungkinkan Safari di Mac memeriksa halaman web ini. Lewati timer mempercepat hitung mundur di halaman download sampai 50x dan mengaktifkan tombol download yang dikunci timer; timer yang ditegakkan server dan verifikasi manusia (mis. Cloudflare) tidak bisa dilewati. Tanpa redirect membuat klik tombol download langsung membuka link finalnya dan membuang popup ke situs lain; popup login/pembayaran yang sah bisa ikut tertahan, matikan kalau perlu.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Privasi (gaya Reynard/Firefox)") {
+                    Picker("Perlindungan pelacakan", selection: $store.browserSettings.trackingProtection) {
+                        Text("Mati").tag("off")
+                        Text("Standar").tag("standard")
+                        Text("Ketat").tag("strict")
+                    }
+                    Toggle("Hanya HTTPS (upgrade http ke https)", isOn: $store.browserSettings.httpsOnly)
+                    TextEditor(text: Binding(
+                        get: { exceptionText },
+                        set: { newValue in
+                            exceptionText = newValue
+                            store.browserSettings.siteExceptions = newValue.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+                        }))
+                        .frame(minHeight: 60)
+                        .onAppear { exceptionText = store.browserSettings.siteExceptions.joined(separator: "\n") }
+                    Text("Situs yang dikecualikan (satu host per baris, mis. contoh.com) — perlindungan dan pemblokiran dimatikan untuk situs itu saja. Standar = daftar Ghostery (EasyList + EasyPrivacy) yang sudah aktif. Ketat = ditambah blokir tracker pihak ketiga. DNS over HTTPS tidak bisa dipaksakan dari dalam app ke WKWebView — DNS browser mengikuti pengaturan sistem iOS; kalau mau DoH, pakai profil DNS (mis. AdGuard) di Pengaturan iOS.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Gestur") {
+                    Toggle("Geser tepi untuk back/forward", isOn: $store.browserSettings.gestureEdgeSwipe)
+                    Toggle("Tarik ke bawah untuk reload", isOn: $store.browserSettings.gesturePullRefresh)
+                    Toggle("Tekan lama tombol reload = hard reload", isOn: $store.browserSettings.gestureHardReload)
+                    Text("Setiap gestur bisa dimatikan sendiri-sendiri, seperti di Reynard. Hard reload memuat ulang halaman tanpa cache (reloadFromOrigin).").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Minta AI di browser") {
                     Picker("AI", selection: $store.browserSettings.aiProvider) {
