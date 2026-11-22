@@ -422,7 +422,6 @@ struct BrowserView: View {
                 .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingMedia = false } } }
             }
         }
-        .sheet(isPresented: $showingNewExtension) { NewExtensionView() }
     }
 
     // MARK: Chrome-style tab strip
@@ -556,17 +555,25 @@ struct AdBlockPanelView: View {
                     LabeledContent("Status", value: "Rules recompile when the browser reloads.")
                 }
                 Section("Custom block filters (one per line)") {
-                    TextEditor(text: $blockText)
+                    TextEditor(text: Binding(
+                        get: { blockText },
+                        set: { newValue in
+                            blockText = newValue
+                            store.browserSettings.customBlockFilters = newValue.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                        }))
                         .frame(minHeight: 90)
                         .onAppear { blockText = store.browserSettings.customBlockFilters.joined(separator: "\n") }
-                        .onChange(of: blockText) { store.browserSettings.customBlockFilters = blockText.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
                     Text("Examples: ||ads.example.com · *.adnxs.com · *banner* · /regex/ — lines starting with ! or # are ignored.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Allowlist (never blocked)") {
-                    TextEditor(text: $allowText)
+                    TextEditor(text: Binding(
+                        get: { allowText },
+                        set: { newValue in
+                            allowText = newValue
+                            store.browserSettings.customAllowFilters = newValue.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                        }))
                         .frame(minHeight: 60)
                         .onAppear { allowText = store.browserSettings.customAllowFilters.joined(separator: "\n") }
-                        .onChange(of: allowText) { store.browserSettings.customAllowFilters = allowText.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
                 }
                 Section("Extensions (JavaScript userscripts)") {
                     ForEach($store.browserSettings.extensions) { $ext in
