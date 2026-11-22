@@ -62,7 +62,7 @@ struct SettingsView: View {
                     Text("Plain HTTP on trusted home Wi-Fi only, while the app is in the foreground. The desktop remote uses HTTPS pairing; that pairing flow is not ported.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Browser & AdBlock") {
-                    Toggle("Built-in AdBlock (automatic)", isOn: $store.browserSettings.adBlockEnabled)
+                    Toggle("Ghostery AdBlock (EasyList + EasyPrivacy)", isOn: $store.browserSettings.adBlockEnabled)
                     Toggle("Custom AdBlock (your URL filters)", isOn: $store.browserSettings.customAdBlockEnabled)
                     Toggle("Desktop site", isOn: $store.browserSettings.desktopMode)
                     Toggle("Putar di background (termasuk YouTube)", isOn: $store.browserSettings.backgroundPlayback)
@@ -71,6 +71,7 @@ struct SettingsView: View {
                     Toggle("Tampilkan pratinjau link (tekan lama)", isOn: $store.browserSettings.linkPreview)
                     Toggle("Deteksi alamat (buka di Google Maps)", isOn: $store.browserSettings.detectAddresses)
                     Toggle("Web Inspector (periksa dari Safari di Mac)", isOn: $store.browserSettings.webInspector)
+                    Toggle("Lewati timer tunggu (countdown download)", isOn: $store.browserSettings.skipTimers)
                     TextField("Home page", text: $store.browserSettings.homePage)
                         .autocapitalization(.none).autocorrectionDisabled()
                     Text("The in-app browser (Tools → Browser) runs both AdBlock lists together and captures downloads straight into the queue. Chrome extensions cannot run on iOS — the browser's extensions are JavaScript userscripts, managed in the browser's shield panel.").font(.caption).foregroundStyle(.secondary)

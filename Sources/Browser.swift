@@ -82,6 +82,8 @@ struct BrowserSettings: Codable {
     var linkPreview: Bool = true
     var detectAddresses: Bool = true
     var webInspector: Bool = true
+    // Timer bypass: speed up countdown waits on download pages.
+    var skipTimers: Bool = false
     var bookmarks: [BrowserBookmark] = BrowserBookmark.defaults
     // Ask AI: provider id ("Gemini", "ChatGPT", "Claude", "Muse") + model per provider.
     // API keys are NOT stored here — see KeychainHelper in BrowserAI.swift.
@@ -602,6 +604,14 @@ final class BrowserSession: ObservableObject {
                             injectionTime: .atDocumentEnd,
                             forMainFrameOnly: true))
                     }
+                    // Timer bypass: speed up countdown waits (download
+                    // pages, link shorteners) when enabled.
+                    if settings.skipTimers {
+                        ucc.addUserScript(WKUserScript(
+                            source: BrowserSession.timerBypassScript,
+                            injectionTime: .atDocumentStart,
+                            forMainFrameOnly: true))
+                    }
                     webView.allowsLinkPreview = settings.linkPreview
                     if #available(iOS 16.4, *) { webView.isInspectable = settings.webInspector }
                     webView.customUserAgent = settings.desktopMode
@@ -892,6 +902,86 @@ final class BrowserSession: ObservableObject {
       }
       setTimeout(scan, 800);
       setInterval(scan, 3000);
+    })()
+    """
+
+    /// Timer bypass (best effort, opt-in): countdown waits on download /
+    /// link-shortener pages are usually plain setTimeout/setInterval
+    /// counters in page JavaScript. This runs at document start, before
+    /// page scripts, and divides every timer delay by 50, so a 10-second
+    /// countdown finishes in ~0.2s; a scanner also re-enables download
+    /// buttons that a countdown left disabled or hidden. It cannot beat
+    /// waits enforced server-side (the link is generated only after the
+    /// server's own delay) or human-verification gates like Cloudflare.
+    static let timerBypassScript = """
+    (function() {
+      if (window.__mdmTimerBypass) return;
+      window.__mdmTimerBypass = true;
+      var SPEED = 50;
+      var nativeSetTimeout = window.setTimeout.bind(window);
+      var nativeSetInterval = window.setInterval.bind(window);
+      function scaleDelay(d) {
+        d = Number(d) || 0;
+        if (d <= 0) return d;
+        return Math.max(0, Math.floor(d / SPEED));
+      }
+      window.setTimeout = function(fn, delay) {
+        var args = Array.prototype.slice.call(arguments, 2);
+        return nativeSetTimeout.apply(window, [fn, scaleDelay(delay)].concat(args));
+      };
+      window.setInterval = function(fn, delay) {
+        var args = Array.prototype.slice.call(arguments, 2);
+        return nativeSetInterval.apply(window, [fn, scaleDelay(delay)].concat(args));
+      };
+      var DOWNLOAD_RE = /(download|unduh|get\\s*link|continue|lanjutkan|free\\s*download)/i;
+      var COUNT_RE = /(\\d+)\\s*(seconds?|secs?|detik)/i;
+      var WAIT_RE = /please\\s*wait|mohon\\s*tunggu|waiting|preparing/i;
+      function isHidden(el) {
+        var s = window.getComputedStyle(el);
+        return s.display === 'none' || s.visibility === 'hidden';
+      }
+      function enable(el) {
+        try {
+          el.removeAttribute('disabled');
+          el.removeAttribute('aria-disabled');
+          el.classList.remove('disabled');
+          el.style.pointerEvents = 'auto';
+          el.style.opacity = '';
+          if (isHidden(el)) el.style.setProperty('display', 'inline-block', 'important');
+        } catch (e) {}
+      }
+      function nearbyText(el) {
+        var text = '';
+        var node = el;
+        for (var level = 0; level < 2 && node; level++) {
+          node = node.parentElement;
+          if (!node) break;
+          text += ' ' + (node.innerText || '');
+        }
+        return text;
+      }
+      function scan() {
+        try {
+          if (!document.body) return;
+          var els = document.querySelectorAll('a, button, input[type="button"], input[type="submit"]');
+          for (var i = 0; i < els.length; i++) {
+            var el = els[i];
+            var text = (el.innerText || el.value || el.getAttribute('aria-label') || '');
+            if (!DOWNLOAD_RE.test(text)) continue;
+            var gated = el.disabled || el.getAttribute('aria-disabled') === 'true' ||
+              el.classList.contains('disabled') || isHidden(el);
+            if (!gated) continue;
+            var near = nearbyText(el);
+            if (COUNT_RE.test(text) || COUNT_RE.test(near) || WAIT_RE.test(near)) enable(el);
+          }
+        } catch (e) {}
+      }
+      nativeSetInterval(scan, 500);
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', scan);
+      } else {
+        scan();
+      }
     })()
     """
 
@@ -3027,7 +3117,8 @@ struct AdBlockPanelView: View {
                     Toggle("Tampilkan pratinjau link (tekan lama)", isOn: $store.browserSettings.linkPreview)
                     Toggle("Deteksi alamat (buka di Google Maps)", isOn: $store.browserSettings.detectAddresses)
                     Toggle("Web Inspector (periksa dari Safari di Mac)", isOn: $store.browserSettings.webInspector)
-                    Text("Blokir popup menahan jendela yang dibuka script (window.open); tautan yang diketuk tetap dibuka. Deteksi alamat menandai alamat jalan di halaman menjadi tautan ke Google Maps untuk rute dan info lokal. Web Inspector memungkinkan Safari di Mac memeriksa halaman web ini.").font(.caption).foregroundStyle(.secondary)
+                    Toggle("Lewati timer tunggu (countdown download)", isOn: $store.browserSettings.skipTimers)
+                    Text("Blokir popup menahan jendela yang dibuka script (window.open); tautan yang diketuk tetap dibuka. Deteksi alamat menandai alamat jalan di halaman menjadi tautan ke Google Maps untuk rute dan info lokal. Web Inspector memungkinkan Safari di Mac memeriksa halaman web ini. Lewati timer mempercepat hitung mundur di halaman download sampai 50x dan mengaktifkan tombol download yang dikunci timer; timer yang ditegakkan server dan verifikasi manusia (mis. Cloudflare) tidak bisa dilewati.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Minta AI di browser") {
                     Picker("AI", selection: $store.browserSettings.aiProvider) {
