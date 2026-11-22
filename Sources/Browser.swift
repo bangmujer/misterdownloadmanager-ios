@@ -2860,6 +2860,8 @@ struct AdBlockPanelView: View {
     @State private var allowText = ""
     @State private var showingNewExtension = false
     @State private var editingExtension: BrowserExtension?
+    @State private var showingScriptImporter = false
+    @State private var scriptImportResult: String?
 
     var body: some View {
         NavigationStack {
@@ -2909,6 +2911,10 @@ struct AdBlockPanelView: View {
                     }
                     .onDelete { store.browserSettings.extensions.remove(atOffsets: $0) }
                     Button("Add extension…") { showingNewExtension = true }
+                    Button("Impor file .js…") { showingScriptImporter = true }
+                    if let scriptImportResult {
+                        Text(scriptImportResult).font(.caption).foregroundStyle(.secondary)
+                    }
                     Text("iOS cannot run Chrome extensions — these are page scripts (userscripts) that run inside this browser only, the same approach Safari extensions use. They cannot see other apps or the system. Setiap script bisa dipilih jalannya di awal dokumen (sebelum halaman dimuat) atau akhir dokumen (sesudah halaman dimuat).").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Browser") {
@@ -2951,7 +2957,52 @@ struct AdBlockPanelView: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { store.saveBrowserSettings(); dismiss() } } }
             .sheet(isPresented: $showingNewExtension) { NewExtensionView() }
             .sheet(item: $editingExtension) { ext in EditExtensionView(ext: ext) }
+            .fileImporter(isPresented: $showingScriptImporter, allowedContentTypes: [UTType.javaScript, UTType.plainText], allowsMultipleSelection: false) { result in
+                importScript(from: result)
+            }
         }
+    }
+
+    private func importScript(from result: Result<[URL], Error>) {
+        guard let url = try? result.get().first else { return }
+        guard url.startAccessingSecurityScopedResource() else {
+            scriptImportResult = "File tidak bisa dibuka."
+            return
+        }
+        defer { url.stopAccessingSecurityScopedResource() }
+        guard let data = try? Data(contentsOf: url),
+              let source = String(data: data, encoding: .utf8),
+              !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            scriptImportResult = "File kosong atau bukan teks."
+            return
+        }
+        let meta = Self.userscriptMeta(source)
+        var base = url.deletingPathExtension().lastPathComponent
+        if base.hasSuffix(".user") { base = String(base.dropLast(5)) }
+        let name = meta.name ?? (base.isEmpty ? "Userscript" : base)
+        store.browserSettings.extensions.append(BrowserExtension(name: name, source: source, enabled: true, atDocumentStart: meta.atStart))
+        store.saveBrowserSettings()
+        scriptImportResult = "\"\(name)\" diimpor\(meta.atStart ? " (awal dokumen)" : "")."
+    }
+
+    /// Userscript metadata block (// ==UserScript== … // ==/UserScript==):
+    /// @name becomes the extension name, @run-at document-start picks
+    /// "Awal dokumen" timing.
+    static func userscriptMeta(_ source: String) -> (name: String?, atStart: Bool) {
+        var name: String?
+        var atStart = false
+        for line in source.components(separatedBy: .newlines).prefix(50) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t == "// ==/UserScript==" { break }
+            guard t.hasPrefix("//") else { continue }
+            let body = t.dropFirst(2).trimmingCharacters(in: .whitespaces)
+            if body.hasPrefix("@name") {
+                name = body.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            } else if body.hasPrefix("@run-at") {
+                atStart = body.dropFirst(7).trimmingCharacters(in: .whitespaces).lowercased().contains("document-start")
+            }
+        }
+        return (name, atStart)
     }
 }
 
