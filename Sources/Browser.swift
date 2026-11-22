@@ -235,7 +235,7 @@ enum AdBlockRules {
             // network-only, then the tiny built-in patterns. Each set is
             // an array of chunks; the user rules are appended to every
             // chunk so the allowlist cancels Ghostery blocks too.
-            var attempts: [[[String: Any]]] = []
+            var attempts: [[[[String: Any]]]] = []
             if settings.adBlockEnabled {
                 var full: [[[String: Any]]] = []
                 for i in 1...ghosteryChunkCount {
