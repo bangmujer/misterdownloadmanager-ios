@@ -168,6 +168,34 @@ final class DownloadStore: ObservableObject {
     }
     func item(_ id: UUID) -> DownloadItem? { items.first(where: { $0.id == id }) }
 
+    /// Strips tracking/token junk from a file name derived from a URL.
+    /// Some hosts append tokens to the download path itself, e.g.
+    /// `kingkongtv-v1.5.apk&k=f5d018...`, which `lastPathComponent`
+    /// keeps verbatim (there is no `?` for URL parsing to strip). The
+    /// name must end at the file extension: keep the name through the
+    /// end of the extension run and drop a following `&...`/`;...`
+    /// parameter, plus any `?...`/`#...` leftovers.
+    static func cleanFileName(_ raw: String) -> String {
+        var name = raw.removingPercentEncoding ?? raw
+        if let cut = name.firstIndex(where: { $0 == "?" || $0 == "#" }) {
+            name = String(name[..<cut])
+        }
+        if let dot = name.lastIndex(of: ".") {
+            let afterDot = name.index(after: dot)
+            if afterDot < name.endIndex {
+                let extEnd = name[afterDot...].firstIndex(where: { !$0.isLetter && !$0.isNumber }) ?? name.endIndex
+                if extEnd < name.endIndex, name[extEnd] == "&" || name[extEnd] == ";" {
+                    name = String(name[..<extEnd])
+                }
+            }
+        } else if let cut = name.firstIndex(where: { $0 == "&" || $0 == ";" }) {
+            name = String(name[..<cut])
+        }
+        name = name.replacingOccurrences(of: "/", with: "_")
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "download" : trimmed
+    }
+
     // MARK: - Adding
     @discardableResult
     func addItem(urlString: String, fileName: String? = nil, category: DownloadCategory? = nil, connections: Int? = nil, checksumType: String? = nil, checksumValue: String? = nil, referer: String? = nil, startNow: Bool = true) -> DownloadItem? {
@@ -183,7 +211,8 @@ final class DownloadStore: ObservableObject {
             item.errorMessage = "Magnet: tempel di Tambah Torrent untuk mulai mengunduh via peer."
             items.insert(item, at: 0); save(); return item
         }
-        let name = fileName?.isEmpty == false ? fileName! : (url.lastPathComponent.isEmpty || url.lastPathComponent == "/" ? "download" : url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent)
+        let rawName = fileName?.isEmpty == false ? fileName! : (url.lastPathComponent.isEmpty || url.lastPathComponent == "/" ? "download" : url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent)
+        let name = DownloadStore.cleanFileName(rawName)
         let cat = category ?? DownloadCategory.from(fileName: name, mime: nil)
         var item = DownloadItem(url: trimmed, fileName: name, category: cat, state: settings.startPaused ? .paused : .queued, connections: connections ?? settings.maxConnections, referer: referer, userAgent: settings.userAgent, checksumType: checksumType, checksumValue: checksumValue, site: url.host)
         item.userAgent = settings.userAgent
@@ -278,7 +307,12 @@ final class DownloadStore: ObservableObject {
                     self.updateItem(id) {
                         $0.totalBytes = probe.totalBytes
                         $0.resumeSupported = probe.acceptRanges
-                        if let fn = probe.fileName, $0.fileName == "download" || $0.fileName.isEmpty { $0.fileName = fn }
+                        // Clean the name (tokens like &k=... appended to
+                        // the path by some hosts) and prefer the server's
+                        // Content-Disposition filename when the URL gave
+                        // us nothing usable.
+                        $0.fileName = DownloadStore.cleanFileName($0.fileName)
+                        if let fn = probe.fileName, $0.fileName == "download" || $0.fileName.isEmpty { $0.fileName = DownloadStore.cleanFileName(fn) }
                         $0.mimeType = probe.mimeType
                         $0.category = DownloadCategory.from(fileName: $0.fileName, mime: probe.mimeType)
                         $0.url = probe.finalURL.absoluteString
