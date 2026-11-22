@@ -34,6 +34,11 @@ struct DevNetworkEntry: Identifiable {
     var status: Int
     var durationMs: Int
     var source: String
+    var requestHeaders: [String: String] = [:]
+    var requestBody: String = ""
+    var responseHeaders: [String: String] = [:]
+    var responseBody: String = ""
+    var mimeType: String = ""
 }
 
 struct DevElementInfo {
@@ -90,32 +95,75 @@ enum DevToolsBridge {
       });
       var origFetch = window.fetch;
       window.fetch = function() {
-        var url = '', method = 'GET';
+        var url = '', method = 'GET', reqHeaders = {}, reqBody = '';
         try {
           var input = arguments[0];
           url = (typeof input === 'string') ? input : (input && input.url) || '';
           var opts = arguments[1] || {};
           method = opts.method || (input && input.method) || 'GET';
+          if (opts.headers) {
+            if (typeof opts.headers.forEach === 'function') { opts.headers.forEach(function(v, k) { reqHeaders[k] = v; }); }
+            else if (opts.headers instanceof Array) { opts.headers.forEach(function(p) { reqHeaders[p[0]] = p[1]; }); }
+            else { for (var hk in opts.headers) { reqHeaders[hk] = opts.headers[hk]; } }
+          }
+          if (input && input.headers && typeof input.headers.forEach === 'function') {
+            input.headers.forEach(function(v, k) { if (!(k in reqHeaders)) reqHeaders[k] = v; });
+          }
+          if (opts.body) { reqBody = String(opts.body).slice(0, 4000); }
+          else if (input && input.body) { try { reqBody = String(input.body).slice(0, 4000); } catch (e0) {} }
         } catch (e) {}
         var start = performance.now();
+        function send(resStatus, resHeaders, resBody, mime) {
+          post({kind: 'network', method: method, url: String(url), status: resStatus, duration: Math.round(performance.now() - start), reqHeaders: reqHeaders, reqBody: reqBody, resHeaders: resHeaders || {}, resBody: resBody || '', mime: mime || ''});
+        }
         return origFetch.apply(this, arguments).then(function(res) {
-          post({kind: 'network', method: method, url: String(url), status: res.status, duration: Math.round(performance.now() - start)});
+          var h = {};
+          try { res.headers.forEach(function(v, k) { h[k] = v; }); } catch (e2) {}
+          var mime = '';
+          try { mime = res.headers.get('content-type') || ''; } catch (e3) {}
+          var done = false;
+          try {
+            var p = res.clone().text();
+            if (p && p.then) {
+              p.then(function(t) { if (!done) { done = true; send(res.status, h, String(t).slice(0, 20000), mime); } })
+               .catch(function() { if (!done) { done = true; send(res.status, h, '', mime); } });
+            }
+          } catch (e4) {}
+          if (!done) { setTimeout(function() { if (!done) { done = true; send(res.status, h, '', mime); } }, 1500); }
           return res;
         }).catch(function(err) {
-          post({kind: 'network', method: method, url: String(url), status: 0, duration: Math.round(performance.now() - start)});
+          send(0, {}, '', '');
           throw err;
         });
       };
       var origOpen = XMLHttpRequest.prototype.open;
       var origSend = XMLHttpRequest.prototype.send;
+      var origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+      XMLHttpRequest.prototype.setRequestHeader = function(k, v) {
+        try { this.__mdmReqHeaders = this.__mdmReqHeaders || {}; this.__mdmReqHeaders[k] = v; } catch (e) {}
+        return origSetHeader.apply(this, arguments);
+      };
       XMLHttpRequest.prototype.open = function(method, url) {
         this.__mdmMethod = method; this.__mdmURL = url;
         return origOpen.apply(this, arguments);
       };
-      XMLHttpRequest.prototype.send = function() {
+      XMLHttpRequest.prototype.send = function(body) {
         var xhr = this, start = performance.now();
+        try { xhr.__mdmReqBody = (typeof body === 'string') ? body.slice(0, 4000) : (body ? '[binary]' : ''); } catch (e) {}
         function done() {
-          post({kind: 'network', method: xhr.__mdmMethod || 'GET', url: String(xhr.__mdmURL || ''), status: xhr.status || 0, duration: Math.round(performance.now() - start)});
+          var resHeaders = {};
+          try {
+            var raw = xhr.getAllResponseHeaders() || '';
+            raw.split('\\r\\n').forEach(function(line) {
+              var i = line.indexOf(':');
+              if (i > 0) resHeaders[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+            });
+          } catch (e2) {}
+          var resBody = '';
+          try { resBody = String(xhr.responseText || '').slice(0, 20000); } catch (e3) {}
+          var mime = '';
+          try { mime = xhr.getResponseHeader('Content-Type') || ''; } catch (e4) {}
+          post({kind: 'network', method: xhr.__mdmMethod || 'GET', url: String(xhr.__mdmURL || ''), status: xhr.status || 0, duration: Math.round(performance.now() - start), reqHeaders: xhr.__mdmReqHeaders || {}, reqBody: xhr.__mdmReqBody || '', resHeaders: resHeaders, resBody: resBody, mime: mime});
         }
         xhr.addEventListener('load', done);
         xhr.addEventListener('error', done);
@@ -206,6 +254,13 @@ enum DevToolsBridge {
 // MARK: - Message routing (bridge -> session state)
 
 enum DevToolsRouter {
+    static func stringDict(_ value: Any?) -> [String: String] {
+        guard let d = value as? [String: Any] else { return [:] }
+        var out: [String: String] = [:]
+        for (k, v) in d { out[k] = String(describing: v) }
+        return out
+    }
+
     static func handle(session: BrowserSession, tabID: UUID, body: [String: Any]) {
         DispatchQueue.main.async {
             guard let kind = body["kind"] as? String else { return }
@@ -220,7 +275,12 @@ enum DevToolsRouter {
                     url: body["url"] as? String ?? "",
                     status: (body["status"] as? NSNumber)?.intValue ?? 0,
                     durationMs: (body["duration"] as? NSNumber)?.intValue ?? 0,
-                    source: "fetch/xhr")
+                    source: "fetch/xhr",
+                    requestHeaders: DevToolsRouter.stringDict(body["reqHeaders"]),
+                    requestBody: body["reqBody"] as? String ?? "",
+                    responseHeaders: DevToolsRouter.stringDict(body["resHeaders"]),
+                    responseBody: body["resBody"] as? String ?? "",
+                    mimeType: body["mime"] as? String ?? "")
                 session.appendNetwork(tabID: tabID, entry: entry)
             case "inspect":
                 var style: [String: String] = [:]
@@ -307,6 +367,13 @@ extension BrowserSession {
         }
     }
 
+    func deleteCookie(_ cookie: HTTPCookie, completion: (() -> Void)? = nil) {
+        guard let webView = webViews[selectedID] else { completion?(); return }
+        webView.configuration.websiteDataStore.httpCookieStore.deleteCookie(cookie) {
+            DispatchQueue.main.async { completion?() }
+        }
+    }
+
     func clearWebStorage() {
         evaluateJS("try { localStorage.clear(); } catch (e) {} try { sessionStorage.clear(); } catch (e) {}")
     }
@@ -330,6 +397,8 @@ struct DevToolsView: View {
     @Environment(\.dismiss) var dismiss
     @State private var tab = 0
     @State private var jsInput = ""
+    @State private var consoleFilter = 0
+    @State private var selectedEntry: DevNetworkEntry?
     @State private var domText = ""
     @State private var domFilter = ""
     @State private var domLoaded = false
@@ -351,6 +420,16 @@ struct DevToolsView: View {
     var tabID: UUID? { session.selectedTab?.id }
     var logs: [DevConsoleEntry] { tabID.flatMap { session.consoleLogs[$0] } ?? [] }
     var netLogs: [DevNetworkEntry] { tabID.flatMap { session.networkLogs[$0] } ?? [] }
+
+    private var filteredLogs: [DevConsoleEntry] {
+        switch consoleFilter {
+        case 1: return logs.filter { $0.level == "error" }
+        case 2: return logs.filter { $0.level == "warn" }
+        case 3: return logs.filter { ["log", "info", "debug"].contains($0.level) }
+        case 4: return logs.filter { ["input", "result"].contains($0.level) }
+        default: return logs
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -380,18 +459,27 @@ struct DevToolsView: View {
     private var consoleTab: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("\(logs.count) entri").font(.caption).foregroundStyle(.secondary)
+                Text("\(filteredLogs.count) dari \(logs.count) entri").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button("Hapus log") { if let id = tabID { session.consoleLogs[id] = [] } }
                     .font(.subheadline)
             }
             .padding(.horizontal, 12).padding(.vertical, 6)
+            Picker("Filter", selection: $consoleFilter) {
+                Text("Semua").tag(0)
+                Text("Error").tag(1)
+                Text("Peringatan").tag(2)
+                Text("Info").tag(3)
+                Text("Hasil JS").tag(4)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 12).padding(.bottom, 4)
             List {
-                if logs.isEmpty {
+                if filteredLogs.isEmpty {
                     Text("Belum ada log. Console halaman ini akan muncul di sini — termasuk console.log, peringatan, dan error JavaScript. Muat ulang halaman kalau log awal terlewat.")
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(logs) { entry in
+                    ForEach(filteredLogs) { entry in
                         HStack(alignment: .top, spacing: 8) {
                             Text(Self.timeFormatter.string(from: entry.time))
                                 .font(.caption).foregroundStyle(.secondary)
@@ -519,6 +607,8 @@ struct DevToolsView: View {
                 .textSelection(.enabled)
                 .padding(8)
                 .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+            Button("Salin HTML") { UIPasteboard.general.string = el.html }
+                .font(.subheadline)
         }
         .padding(12)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
@@ -595,16 +685,19 @@ struct DevToolsView: View {
                         Text("Belum ada entri. Navigasi dan panggilan fetch/XHR halaman ini tercatat di sini.").foregroundStyle(.secondary)
                     }
                     ForEach(netLogs) { e in
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(spacing: 6) {
-                                Text(e.method).font(.caption.weight(.bold))
-                                statusBadge(e.status)
-                                Text(e.source).font(.caption).foregroundStyle(.secondary)
-                                Spacer()
-                                Text("\(e.durationMs) ms").font(.caption).foregroundStyle(.secondary)
+                        Button { selectedEntry = e } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(spacing: 6) {
+                                    Text(e.method).font(.caption.weight(.bold))
+                                    statusBadge(e.status)
+                                    Text(e.source).font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text("\(e.durationMs) ms").font(.caption).foregroundStyle(.secondary)
+                                }
+                                Text(e.url).font(.caption).lineLimit(2).textSelection(.enabled)
                             }
-                            Text(e.url).font(.caption).lineLimit(2).textSelection(.enabled)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
                 if !resources.isEmpty {
@@ -625,6 +718,7 @@ struct DevToolsView: View {
             }
             .listStyle(.plain)
         }
+        .sheet(item: $selectedEntry) { entry in NetworkDetailView(entry: entry) }
     }
 
     func statusBadge(_ status: Int) -> some View {
@@ -657,15 +751,25 @@ struct DevToolsView: View {
                         Text("Tidak ada cookie.").font(.subheadline).foregroundStyle(.secondary)
                     }
                     ForEach(Array(webCookies.enumerated()), id: \.offset) { _, c in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(c.name) · \(c.domain)").font(.subheadline)
-                            Text(String(c.value.prefix(120))).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        HStack(alignment: .top, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("\(c.name) · \(c.domain)").font(.subheadline)
+                                Text(String(c.value.prefix(120))).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            }
+                            Spacer()
+                            Button { session.deleteCookie(c) { loadStorage() } } label: {
+                                Image(systemName: "trash").foregroundStyle(.red)
+                            }
                         }
                     }
                     Text("document.cookie").font(.headline)
                     Text(cookieRaw.isEmpty ? "(kosong)" : cookieRaw).font(.caption).textSelection(.enabled)
-                    storageDictSection(title: "localStorage", items: localItems)
-                    storageDictSection(title: "sessionStorage", items: sessionItems)
+                    storageDictSection(title: "localStorage", items: localItems) { key in
+                        deleteStorageItem(storeName: "localStorage", key: key)
+                    }
+                    storageDictSection(title: "sessionStorage", items: sessionItems) { key in
+                        deleteStorageItem(storeName: "sessionStorage", key: key)
+                    }
                     HStack(spacing: 8) {
                         Button("Hapus cookie") { session.clearCookies { loadStorage() } }
                         Button("Hapus local & session") { session.clearWebStorage(); loadStorage() }
@@ -680,19 +784,34 @@ struct DevToolsView: View {
         }
     }
 
-    func storageDictSection(title: String, items: [String: String]) -> some View {
+    func storageDictSection(title: String, items: [String: String], onDelete: ((String) -> Void)? = nil) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("\(title) (\(items.count))").font(.headline)
             if items.isEmpty {
                 Text("(kosong)").font(.subheadline).foregroundStyle(.secondary)
             } else {
                 ForEach(items.sorted(by: { $0.key < $1.key }), id: \.key) { k, v in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(k).font(.subheadline)
-                        Text(v).font(.caption).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled)
+                    HStack(alignment: .top, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(k).font(.subheadline)
+                            Text(v).font(.caption).foregroundStyle(.secondary).lineLimit(3).textSelection(.enabled)
+                        }
+                        Spacer()
+                        if let onDelete {
+                            Button { onDelete(k) } label: {
+                                Image(systemName: "trash").foregroundStyle(.red)
+                            }
+                        }
                     }
                 }
             }
+        }
+    }
+
+    private func deleteStorageItem(storeName: String, key: String) {
+        let encoded = "\"" + key.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        session.evaluateJS("try { \(storeName).removeItem(\(encoded)); } catch (e) {}") { _, _ in
+            DispatchQueue.main.async { self.loadStorage() }
         }
     }
 
@@ -711,5 +830,82 @@ struct DevToolsView: View {
                 storageLoaded = true
             }
         }
+    }
+}
+
+// MARK: - Network request/response detail
+
+struct NetworkDetailView: View {
+    var entry: DevNetworkEntry
+    @Environment(\.dismiss) var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Ringkasan") {
+                    detailRow("Method", entry.method)
+                    detailRow("URL", entry.url)
+                    detailRow("Status", "\(entry.status)")
+                    detailRow("Waktu", "\(entry.durationMs) ms")
+                    detailRow("Sumber", entry.source)
+                    if !entry.mimeType.isEmpty { detailRow("Content-Type", entry.mimeType) }
+                    detailRow("Waktu catat", Self.timeString(entry.time))
+                }
+                Section("Request") {
+                    if entry.requestHeaders.isEmpty && entry.requestBody.isEmpty {
+                        Text("(tidak ada header/body yang tertangkap)").foregroundStyle(.secondary)
+                    }
+                    ForEach(entry.requestHeaders.sorted(by: { $0.key < $1.key }), id: \.key) { k, v in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(k).font(.caption.weight(.bold))
+                            Text(v).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                        }
+                    }
+                    if !entry.requestBody.isEmpty {
+                        Text("Body").font(.caption.weight(.bold))
+                        Text(entry.requestBody).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    }
+                }
+                Section("Response") {
+                    if entry.responseHeaders.isEmpty {
+                        Text("(tidak ada header yang tertangkap)").foregroundStyle(.secondary)
+                    }
+                    ForEach(entry.responseHeaders.sorted(by: { $0.key < $1.key }), id: \.key) { k, v in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(k).font(.caption.weight(.bold))
+                            Text(v).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                        }
+                    }
+                    if entry.source == "navigation" {
+                        Text("Badan respons tidak tersedia untuk navigasi — WebKit tidak mengekspos isi halaman yang dimuat lewat navigasi. Ketuk entri fetch/XHR untuk melihat badan respons.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if entry.responseBody.isEmpty {
+                        Text("(badan respons kosong atau tidak tertangkap — mis. respons streaming, biner, atau opaque)").foregroundStyle(.secondary)
+                    } else {
+                        Text(entry.responseBody).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    }
+                    Button("Salin badan respons") {
+                        UIPasteboard.general.string = entry.responseBody
+                    }
+                    .disabled(entry.responseBody.isEmpty)
+                }
+            }
+            .navigationTitle("Detail request")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Selesai") { dismiss() } } }
+        }
+    }
+
+    func detailRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label).font(.caption).foregroundStyle(.secondary).frame(width: 90, alignment: .leading)
+            Text(value).font(.caption).textSelection(.enabled)
+        }
+    }
+
+    static func timeString(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: date)
     }
 }

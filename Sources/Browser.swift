@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import UniformTypeIdentifiers
 import WebKit
 
 // MARK: - Browser, ad-block, tab groups & "Ask AI"
@@ -76,6 +77,11 @@ struct BrowserSettings: Codable {
     // Both default ON and can be switched off in settings.
     var backgroundPlayback: Bool = true
     var pictureInPicture: Bool = true
+    // Content settings.
+    var blockPopups: Bool = true
+    var linkPreview: Bool = true
+    var detectAddresses: Bool = true
+    var webInspector: Bool = true
     var bookmarks: [BrowserBookmark] = BrowserBookmark.defaults
     // Ask AI: provider id ("Gemini", "ChatGPT", "Claude", "Muse") + model per provider.
     // API keys are NOT stored here — see KeychainHelper in BrowserAI.swift.
@@ -257,6 +263,16 @@ final class BrowserSession: ObservableObject {
     @Published var thumbnails: [UUID: UIImage] = [:]
     @Published var overviewMode: OverviewMode = .tabs
     var webViews: [UUID: WKWebView] = [:]
+    // Pending navigations already handed to a WKWebView: updateUIView must
+    // not re-issue load() for them, or bare domains (whose committed URL
+    // gains a trailing slash) reload forever and the page never finishes.
+    var loadingPending: [UUID: URL] = [:]
+    // Latest settings, kept in sync by applyRulesAndScripts, for delegate
+    // callbacks that do not receive the view's settings value.
+    var latestSettings = BrowserSettings()
+    // History recording (set by the browser view; skipped for private tabs).
+    var onHistoryRecord: ((String, String) -> Void)?
+    private var lastHistoryURL: [UUID: String] = [:]
     var onDownloadCaptured: ((URL) -> Void)?
     var onMediaFound: (([URL]) -> Void)?
     // DevTools (F12) state, fed by the in-page bridge script.
@@ -318,6 +334,8 @@ final class BrowserSession: ObservableObject {
         thumbnails.removeValue(forKey: id)
         webViews[id]?.stopLoading()
         webViews.removeValue(forKey: id)
+        loadingPending.removeValue(forKey: id)
+        lastHistoryURL.removeValue(forKey: id)
         if selectedID == id { selectedID = tabs[max(0, idx - 1)].id }
     }
 
@@ -330,6 +348,8 @@ final class BrowserSession: ObservableObject {
         webViews[id]?.stopLoading()
         webViews.removeValue(forKey: id)
         thumbnails.removeValue(forKey: id)
+        loadingPending.removeValue(forKey: id)
+        lastHistoryURL.removeValue(forKey: id)
         for gi in groups.indices { groups[gi].tabIDs.removeAll { $0 == id } }
         var fresh = BrowserTabState()
         fresh.isIncognito = incognito
@@ -342,6 +362,22 @@ final class BrowserSession: ObservableObject {
         tabs[idx].pendingURL = url
         tabs[idx].urlString = url.absoluteString
         tabs[idx].lastUsedAt = Date()
+    }
+
+    /// A requested navigation has started (committed, finished or failed):
+    /// the pending URL is in WebKit's hands now and must not be re-issued.
+    func clearPending(for id: UUID) {
+        loadingPending.removeValue(forKey: id)
+        guard let idx = tabs.firstIndex(where: { $0.id == id }),
+              tabs[idx].pendingURL != nil else { return }
+        tabs[idx].pendingURL = nil
+    }
+
+    func recordHistoryIfNeeded(tabID: UUID, title: String, urlString: String) {
+        guard let tab = tabs.first(where: { $0.id == tabID }), !tab.isIncognito,
+              lastHistoryURL[tabID] != urlString else { return }
+        lastHistoryURL[tabID] = urlString
+        onHistoryRecord?(title, urlString)
     }
 
     func updateTab(id: UUID, title: String? = nil, urlString: String? = nil, progress: Double? = nil,
@@ -428,6 +464,7 @@ final class BrowserSession: ObservableObject {
     }
 
     func applyRulesAndScripts(settings: BrowserSettings) {
+        latestSettings = settings
         AdBlockRules.compile(settings: settings) { [weak self] list in
             guard let self else { return }
             DispatchQueue.main.async {
@@ -465,6 +502,16 @@ final class BrowserSession: ObservableObject {
                             injectionTime: .atDocumentEnd,
                             forMainFrameOnly: true))
                     }
+                    // Address detection: linkify street addresses to Google
+                    // Maps (route + local info) when enabled.
+                    if settings.detectAddresses {
+                        ucc.addUserScript(WKUserScript(
+                            source: BrowserSession.addressDetectorScript,
+                            injectionTime: .atDocumentEnd,
+                            forMainFrameOnly: true))
+                    }
+                    webView.allowsLinkPreview = settings.linkPreview
+                    if #available(iOS 16.4, *) { webView.isInspectable = settings.webInspector }
                     webView.customUserAgent = settings.desktopMode
                         ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
                         : nil
@@ -496,8 +543,8 @@ final class BrowserSession: ObservableObject {
 
     // MARK: DevTools logging
 
-    func recordNavigation(tabID: UUID, url: URL, status: Int) {
-        let entry = DevNetworkEntry(method: "NAV", url: url.absoluteString, status: status, durationMs: 0, source: "navigation")
+    func recordNavigation(tabID: UUID, url: URL, status: Int, responseHeaders: [String: String] = [:]) {
+        let entry = DevNetworkEntry(method: "NAV", url: url.absoluteString, status: status, durationMs: 0, source: "navigation", responseHeaders: responseHeaders)
         networkLogs[tabID, default: []].append(entry)
         trimNetworkLog(tabID)
     }
@@ -715,10 +762,99 @@ final class BrowserSession: ObservableObject {
     })()
     """
 
+    /// Address detection (heuristic): street addresses ("Jl. …", "Jalan …"
+    /// with a number) become links to a Google Maps search, where route
+    /// and local info are shown. Runs on an interval so late-loaded
+    /// content is caught too; already-linked text is left alone.
+    static let addressDetectorScript = """
+    (function() {
+      if (window.__mdmAddrDetect) return;
+      window.__mdmAddrDetect = true;
+      var ADDR_RE = /\\b(Jl\\.?|Jalan)\\s+[A-ZÀ-ÿ0-9][^<\\n,;]{3,60}/g;
+      function scan() {
+        if (!document.body) return;
+        var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+        var nodes = [], checked = 0;
+        while (walker.nextNode() && checked < 400) { nodes.push(walker.currentNode); checked++; }
+        for (var i = 0; i < nodes.length; i++) {
+          var node = nodes[i];
+          var parent = node.parentElement;
+          if (!parent) continue;
+          var tag = parent.tagName;
+          if (tag === 'A' || tag === 'SCRIPT' || tag === 'STYLE' || tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'BUTTON' || tag === 'SELECT') continue;
+          if (parent.closest && parent.closest('a, .__mdmAddr')) continue;
+          var text = node.nodeValue || '';
+          ADDR_RE.lastIndex = 0;
+          var m = ADDR_RE.exec(text);
+          if (!m || !/\\d/.test(m[0])) continue;
+          var match = m[0].replace(/\\s+$/, '');
+          var rest = node.splitText(m.index);
+          rest.splitText(match.length);
+          var link = document.createElement('a');
+          link.textContent = match;
+          link.href = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(match);
+          link.className = '__mdmAddr';
+          link.style.cssText = 'text-decoration:underline dotted;';
+          rest.parentNode.replaceChild(link, rest);
+        }
+      }
+      setTimeout(scan, 800);
+      setInterval(scan, 3000);
+    })()
+    """
+
+    /// Reader-mode extraction (best effort): the <article> element, or
+    /// the container with the most paragraph text. Scripts, chrome and
+    /// inline event handlers are stripped; images are dropped.
+    static let readabilityScript = """
+    (function() {
+      function clean(el) {
+        var bad = el.querySelectorAll('script,style,nav,header,footer,aside,form,noscript,iframe,button,select,input');
+        for (var i = 0; i < bad.length; i++) { bad[i].remove(); }
+        var all = el.querySelectorAll('*');
+        for (var j = 0; j < all.length; j++) {
+          var attrs = all[j].attributes;
+          for (var k = attrs.length - 1; k >= 0; k--) {
+            if (attrs[k].name.slice(0, 2) === 'on') all[j].removeAttribute(attrs[k].name);
+          }
+        }
+      }
+      var title = document.title || '';
+      var root = document.querySelector('article');
+      if (!root) {
+        var best = null, bestScore = 0;
+        var cands = document.querySelectorAll('div,section,main');
+        for (var i = 0; i < cands.length; i++) {
+          var ps = cands[i].querySelectorAll('p');
+          var len = 0;
+          for (var j = 0; j < ps.length; j++) { len += (ps[j].innerText || '').trim().length; }
+          if (ps.length >= 2 && len > bestScore) { bestScore = len; best = cands[i]; }
+        }
+        root = best || document.body;
+      }
+      var clone = root.cloneNode(true);
+      clean(clone);
+      var imgs = clone.querySelectorAll('img');
+      for (var n = 0; n < imgs.length; n++) { imgs[n].remove(); }
+      return JSON.stringify({title: title, html: (clone.innerHTML || '').slice(0, 200000)});
+    })()
+    """
+
     func applyMediaPlaybackSettings(_ settings: BrowserSettings) {
         MediaPlaybackAudio.apply(
             backgroundPlayback: settings.backgroundPlayback,
             pictureInPicture: settings.pictureInPicture)
+    }
+
+    func fetchArticle(completion: @escaping (String, String) -> Void) {
+        evaluateJS(Self.readabilityScript) { result, _ in
+            guard let str = result as? String, let data = str.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                completion("", "")
+                return
+            }
+            completion(json["title"] as? String ?? "", json["html"] as? String ?? "")
+        }
     }
 }
 
@@ -799,10 +935,13 @@ struct BrowserWebView: UIViewRepresentable {
                 injectionTime: .atDocumentStart,
                 forMainFrameOnly: true))
         }
+        webView.allowsLinkPreview = settings.linkPreview
+        if #available(iOS 16.4, *) { webView.isInspectable = settings.webInspector }
         session.webViews[tabID] = webView
         // Apply rules/scripts once created (compile is async; reload after apply).
         session.applyRulesAndScripts(settings: settings)
         if let pending = session.tabs.first(where: { $0.id == tabID })?.pendingURL {
+            session.loadingPending[tabID] = pending
             webView.load(URLRequest(url: pending))
         }
         context.coordinator.observe(webView: webView)
@@ -812,12 +951,13 @@ struct BrowserWebView: UIViewRepresentable {
     func updateUIView(_ webView: WKWebView, context: Context) {
         guard let tab = session.tabs.first(where: { $0.id == tabID }),
               let pending = tab.pendingURL else { return }
-        if webView.url != pending && !(webView.isLoading && webView.url == pending) {
+        // Issue each pending URL exactly once. Comparing webView.url
+        // against pending is unreliable (servers redirect, WebKit
+        // normalises bare domains with a trailing slash), and re-issuing
+        // load() on every state tick restarts the load forever.
+        if session.loadingPending[tabID] != pending {
+            session.loadingPending[tabID] = pending
             webView.load(URLRequest(url: pending))
-        }
-        // Clear pending once loading starts for that URL.
-        if webView.url == pending, let idx = session.tabs.firstIndex(where: { $0.id == tabID }) {
-            session.tabs[idx].pendingURL = nil
         }
     }
 
@@ -852,6 +992,10 @@ struct BrowserWebView: UIViewRepresentable {
                     guard let self, let url = wv.url else { return }
                     self.session.updateTab(id: self.tabID, urlString: url.absoluteString,
                                            canGoBack: wv.canGoBack, canGoForward: wv.canGoForward)
+                    let urlString = url.absoluteString
+                    if urlString.hasPrefix("http://") || urlString.hasPrefix("https://") {
+                        self.session.recordHistoryIfNeeded(tabID: self.tabID, title: wv.title ?? "", urlString: urlString)
+                    }
                 },
                 webView.observe(\.isLoading, options: [.new]) { [weak self] wv, _ in
                     guard let self else { return }
@@ -860,6 +1004,20 @@ struct BrowserWebView: UIViewRepresentable {
                                            canGoBack: wv.canGoBack, canGoForward: wv.canGoForward)
                 },
             ]
+        }
+
+        // A requested navigation has started or ended: the pending URL is
+        // in WebKit's hands now and must not be re-issued.
+        func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+            session.clearPending(for: tabID)
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            session.clearPending(for: tabID)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            session.clearPending(for: tabID)
         }
 
         // Download capture: attachment responses and non-web files go to the MDM queue.
@@ -874,8 +1032,12 @@ struct BrowserWebView: UIViewRepresentable {
             }
             let mime = navigationResponse.response.mimeType ?? ""
             if let url = navigationResponse.response.url {
-                let status = (navigationResponse.response as? HTTPURLResponse)?.statusCode ?? 0
-                session.recordNavigation(tabID: tabID, url: url, status: status)
+                let http = navigationResponse.response as? HTTPURLResponse
+                var headers: [String: String] = [:]
+                if let fields = http?.allHeaderFields {
+                    for (k, v) in fields { headers[String(describing: k)] = String(describing: v) }
+                }
+                session.recordNavigation(tabID: tabID, url: url, status: http?.statusCode ?? 0, responseHeaders: headers)
             }
             if let url = navigationResponse.response.url {
                 let ext = url.pathExtension.lowercased()
@@ -912,6 +1074,12 @@ struct BrowserWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                      for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+            // Popup blocker: script-opened windows (window.open) are
+            // dropped when enabled; links the user tapped (linkActivated)
+            // still open in this tab.
+            if navigationAction.navigationType != .linkActivated, session.latestSettings.blockPopups {
+                return nil
+            }
             if let url = navigationAction.request.url { webView.load(URLRequest(url: url)) }
             return nil
         }
@@ -978,6 +1146,12 @@ struct BrowserView: View {
     @State private var showingOverview = false
     @State private var showingAI = false
     @State private var showingDevTools = false
+    @State private var showingHistory = false
+    @State private var showingBookmarks = false
+    @State private var showingClearData = false
+    @State private var showingReader = false
+    @State private var readerTitle = ""
+    @State private var readerHTML = ""
     @State private var aiContext: (title: String, url: String, text: String)?
     @State private var foundMedia: [URL] = []
     @State private var capturedNotice: String?
@@ -1020,6 +1194,9 @@ struct BrowserView: View {
             session.onDevToolsMessage = { [weak session] tabID, body in
                 guard let session else { return }
                 DevToolsRouter.handle(session: session, tabID: tabID, body: body)
+            }
+            session.onHistoryRecord = { [weak store] title, url in
+                store?.recordHistory(title: title, urlString: url)
             }
             session.applyRulesAndScripts(settings: store.browserSettings)
             session.applyMediaPlaybackSettings(store.browserSettings)
@@ -1066,6 +1243,18 @@ struct BrowserView: View {
         .sheet(isPresented: $showingDevTools) {
             DevToolsView(session: session)
         }
+        .sheet(isPresented: $showingHistory) {
+            HistoryView(session: session)
+        }
+        .sheet(isPresented: $showingBookmarks) {
+            BookmarksView(session: session)
+        }
+        .sheet(isPresented: $showingClearData) {
+            ClearDataView()
+        }
+        .sheet(isPresented: $showingReader) {
+            ReaderView(title: readerTitle, articleHTML: readerHTML)
+        }
     }
 
     // MARK: Floating glass navbar (Safari-style: back / address pill / tabs / menu)
@@ -1100,6 +1289,11 @@ struct BrowserView: View {
             Menu {
                 Button { dismiss() } label: { Label("Kembali ke Download", systemImage: "xmark.circle") }
                 Button { showingDevTools = true } label: { Label("DevTools (F12)", systemImage: "chevron.left.forwardslash.chevron.right") }
+                Button { showingHistory = true } label: { Label("Riwayat", systemImage: "clock") }
+                Button { showingBookmarks = true } label: { Label("Bookmark", systemImage: "bookmark") }
+                Button { openReaderMode() } label: { Label("Mode Baca", systemImage: "book") }
+                    .disabled(session.selectedTab?.showsStartPage == true)
+                Button { showingClearData = true } label: { Label("Hapus Data Penjelajahan…", systemImage: "trash") }
                 if store.browserSettings.pictureInPicture {
                     Button { enterPictureInPicture() } label: { Label("Picture in Picture", systemImage: "pip.enter") }
                 }
@@ -1186,6 +1380,20 @@ struct BrowserView: View {
         store.saveBrowserSettings()
         session.applyRulesAndScripts(settings: store.browserSettings)
         session.reload()
+    }
+
+    private func openReaderMode() {
+        session.fetchArticle { title, html in
+            DispatchQueue.main.async {
+                if html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    capturedNotice = "Mode baca tidak menemukan artikel di halaman ini."
+                } else {
+                    readerTitle = title
+                    readerHTML = html
+                    showingReader = true
+                }
+            }
+        }
     }
 
     private func enterPictureInPicture() {
@@ -1391,6 +1599,359 @@ struct AddBookmarkView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - History, bookmarks, clear browsing data, reader mode
+
+struct BrowserHistoryEntry: Identifiable, Codable, Equatable {
+    var id: UUID = UUID()
+    var title: String
+    var urlString: String
+    var date: Date = Date()
+}
+
+struct HistoryView: View {
+    @EnvironmentObject var store: DownloadStore
+    @ObservedObject var session: BrowserSession
+    @Environment(\.dismiss) var dismiss
+    @State private var query = ""
+    @State private var showingClearConfirm = false
+
+    private var filtered: [BrowserHistoryEntry] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let all = store.browserHistory.reversed()
+        guard !q.isEmpty else { return Array(all) }
+        return all.filter { $0.title.lowercased().contains(q) || $0.urlString.lowercased().contains(q) }
+    }
+
+    private var grouped: [(String, [BrowserHistoryEntry])] {
+        var dict: [String: [BrowserHistoryEntry]] = [:]
+        var order: [String] = []
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today) ?? today
+        let fmt = DateFormatter()
+        fmt.locale = Locale(identifier: "id_ID")
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .none
+        for e in filtered {
+            let day = cal.startOfDay(for: e.date)
+            let label = day == today ? "Hari ini" : (day == yesterday ? "Kemarin" : fmt.string(from: e.date))
+            if dict[label] == nil { dict[label] = []; order.append(label) }
+            dict[label]?.append(e)
+        }
+        return order.map { ($0, dict[$0] ?? []) }
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if store.browserHistory.isEmpty {
+                    Text("Belum ada riwayat. Halaman yang dibuka di tab biasa tercatat di sini; tab samaran tidak pernah mencatat riwayat.")
+                        .foregroundStyle(.secondary)
+                } else if filtered.isEmpty {
+                    Text("Tidak ada yang cocok dengan pencarian.").foregroundStyle(.secondary)
+                } else {
+                    ForEach(grouped, id: \.0) { label, entries in
+                        Section(label) {
+                            ForEach(entries) { entry in
+                                Button {
+                                    if let url = URL(string: entry.urlString) {
+                                        session.navigateSelected(to: url)
+                                    }
+                                    dismiss()
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(entry.title.isEmpty ? (URL(string: entry.urlString)?.host ?? entry.urlString) : entry.title)
+                                            .lineLimit(1)
+                                        HStack(spacing: 6) {
+                                            Text(URL(string: entry.urlString)?.host ?? entry.urlString)
+                                            Text(Self.timeFormatter.string(from: entry.date))
+                                        }
+                                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button(role: .destructive) { store.removeHistoryEntry(id: entry.id) } label: {
+                                        Label("Hapus", systemImage: "trash")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .searchable(text: $query, prompt: "Cari riwayat…")
+            .navigationTitle("Riwayat")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Tutup") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Hapus Semua", role: .destructive) { showingClearConfirm = true }
+                        .disabled(store.browserHistory.isEmpty)
+                }
+            }
+            .confirmationDialog("Hapus seluruh riwayat?", isPresented: $showingClearConfirm, titleVisibility: .visible) {
+                Button("Hapus Semua", role: .destructive) { store.clearBrowserHistory() }
+                Button("Batal", role: .cancel) {}
+            }
+        }
+    }
+}
+
+struct BookmarksView: View {
+    @EnvironmentObject var store: DownloadStore
+    @ObservedObject var session: BrowserSession
+    @Environment(\.dismiss) var dismiss
+    @State private var query = ""
+    @State private var showingAdd = false
+    @State private var editing: BrowserBookmark?
+    @State private var showingImporter = false
+    @State private var importResult: String?
+
+    private var filtered: [BrowserBookmark] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return store.browserSettings.bookmarks }
+        return store.browserSettings.bookmarks.filter { $0.title.lowercased().contains(q) || $0.urlString.lowercased().contains(q) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Button("Tambah bookmark…") { showingAdd = true }
+                    Button("Impor dari Safari / Chrome…") { showingImporter = true }
+                    Text("iOS tidak mengizinkan aplikasi membaca bookmark Safari atau Chrome langsung. Ekspor dulu dari komputer (Safari: File > Ekspor Bookmark; Chrome: Pengelola Bookmark > Ekspor bookmark), lalu pilih file HTML-nya di sini.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Bookmark (\(filtered.count))") {
+                    if filtered.isEmpty {
+                        Text("Belum ada bookmark.").foregroundStyle(.secondary)
+                    }
+                    ForEach(filtered) { mark in
+                        Button {
+                            if let url = URL(string: mark.urlString) { session.navigateSelected(to: url) }
+                            dismiss()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(mark.title).lineLimit(1)
+                                Text(URL(string: mark.urlString)?.host ?? mark.urlString)
+                                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            Button(role: .destructive) {
+                                store.browserSettings.bookmarks.removeAll { $0.id == mark.id }
+                                store.saveBrowserSettings()
+                            } label: { Label("Hapus", systemImage: "trash") }
+                        }
+                        .swipeActions(edge: .leading) {
+                            Button { editing = mark } label: { Label("Ubah", systemImage: "pencil") }
+                                .tint(.blue)
+                        }
+                    }
+                }
+                if let importResult {
+                    Section { Text(importResult) }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .searchable(text: $query, prompt: "Cari bookmark…")
+            .navigationTitle("Bookmark")
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Tutup") { dismiss() } } }
+            .sheet(isPresented: $showingAdd) { AddBookmarkView() }
+            .sheet(item: $editing) { mark in EditBookmarkView(bookmark: mark) }
+            .fileImporter(isPresented: $showingImporter, allowedContentTypes: [UTType.html], allowsMultipleSelection: false) { result in
+                guard let url = try? result.get().first else { return }
+                guard url.startAccessingSecurityScopedResource() else { return }
+                defer { url.stopAccessingSecurityScopedResource() }
+                guard let data = try? Data(contentsOf: url),
+                      let html = String(data: data, encoding: .utf8) else {
+                    importResult = "File tidak bisa dibaca."
+                    return
+                }
+                let parsed = Self.parseBookmarkHTML(html)
+                let existing = Set(store.browserSettings.bookmarks.map(\.urlString))
+                let fresh = parsed.filter { !existing.contains($0.urlString) }
+                store.browserSettings.bookmarks.append(contentsOf: fresh)
+                store.saveBrowserSettings()
+                importResult = fresh.isEmpty
+                    ? "Tidak ada bookmark baru — semuanya sudah ada."
+                    : "\(fresh.count) bookmark diimpor."
+            }
+        }
+    }
+
+    /// Netscape bookmark HTML: the format Safari and Chrome export.
+    static func parseBookmarkHTML(_ html: String) -> [BrowserBookmark] {
+        var out: [BrowserBookmark] = []
+        let pattern = "<a[^>]+href=\"([^\"]+)\"[^>]*>([^<]*)</a>"
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return out }
+        let range = NSRange(html.startIndex..., in: html)
+        for m in regex.matches(in: html, range: range) {
+            guard let hrefRange = Range(m.range(at: 1), in: html),
+                  let titleRange = Range(m.range(at: 2), in: html) else { continue }
+            let href = String(html[hrefRange])
+            let title = String(html[titleRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard href.hasPrefix("http://") || href.hasPrefix("https://") else { continue }
+            out.append(BrowserBookmark(title: title.isEmpty ? href : title, urlString: href))
+        }
+        return out
+    }
+}
+
+struct EditBookmarkView: View {
+    @EnvironmentObject var store: DownloadStore
+    @Environment(\.dismiss) var dismiss
+    var bookmark: BrowserBookmark
+    @State private var title = ""
+    @State private var urlString = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Nama", text: $title)
+                TextField("Alamat (https://…)", text: $urlString)
+                    .autocapitalization(.none).autocorrectionDisabled()
+            }
+            .navigationTitle("Ubah bookmark")
+            .onAppear {
+                title = bookmark.title
+                urlString = bookmark.urlString
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Batal") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Simpan") {
+                        let raw = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !title.isEmpty, !raw.isEmpty else { return }
+                        let normalized = raw.hasPrefix("http://") || raw.hasPrefix("https://") ? raw : "https://" + raw
+                        guard URL(string: normalized) != nil else { return }
+                        if let idx = store.browserSettings.bookmarks.firstIndex(where: { $0.id == bookmark.id }) {
+                            store.browserSettings.bookmarks[idx] = BrowserBookmark(id: bookmark.id, title: title, urlString: normalized)
+                            store.saveBrowserSettings()
+                        }
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+struct ClearDataView: View {
+    @EnvironmentObject var store: DownloadStore
+    @Environment(\.dismiss) var dismiss
+    @State private var clearHistory = true
+    @State private var clearCookies = true
+    @State private var clearCache = true
+    @State private var clearSiteData = false
+    @State private var showingConfirm = false
+    @State private var result: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Hapus") {
+                    Toggle("Riwayat penjelajahan", isOn: $clearHistory)
+                    Toggle("Cookie", isOn: $clearCookies)
+                    Toggle("Cache", isOn: $clearCache)
+                    Toggle("Semua data situs web", isOn: $clearSiteData)
+                }
+                Section {
+                    Text("Cookie dan cache yang dihapus berlaku untuk tab biasa. Tab samaran memakai penyimpanan terpisah yang hilang sendiri saat tab ditutup. Bookmark dan favorit tidak ikut terhapus.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if let result {
+                    Section { Text(result) }
+                }
+            }
+            .navigationTitle("Hapus Data Penjelajahan")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Batal") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Hapus") { showingConfirm = true }
+                        .disabled(!clearHistory && !clearCookies && !clearCache && !clearSiteData)
+                }
+            }
+            .confirmationDialog("Hapus data yang dipilih?", isPresented: $showingConfirm, titleVisibility: .visible) {
+                Button("Hapus", role: .destructive) { performClear() }
+                Button("Batal", role: .cancel) {}
+            }
+        }
+    }
+
+    private func performClear() {
+        if clearHistory { store.clearBrowserHistory() }
+        var types: [String] = []
+        if clearCookies { types.append(WKWebsiteDataTypeCookies) }
+        if clearCache { types += [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache] }
+        if clearSiteData { types = WKWebsiteDataStore.allWebsiteDataTypes() }
+        guard !types.isEmpty else {
+            result = "Riwayat dihapus."
+            return
+        }
+        result = "Menghapus…"
+        let dataStore = WKWebsiteDataStore.default()
+        let typeSet = Set(types)
+        dataStore.fetchDataRecords(ofTypes: typeSet) { records in
+            dataStore.removeData(ofTypes: typeSet, for: records) {
+                DispatchQueue.main.async { result = "Selesai: data yang dipilih sudah dihapus." }
+            }
+        }
+    }
+}
+
+struct ReaderWebView: UIViewRepresentable {
+    var html: String
+    var fontSize: Int
+
+    func makeUIView(context: Context) -> WKWebView {
+        WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+    }
+
+    func updateUIView(_ webView: WKWebView, context: Context) {
+        webView.loadHTMLString(html, baseURL: nil)
+    }
+}
+
+struct ReaderView: View {
+    var title: String
+    var articleHTML: String
+    @State private var fontSize = 18
+    @Environment(\.dismiss) var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ReaderWebView(html: readerHTML, fontSize: fontSize)
+                .navigationTitle("Mode Baca")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Tutup") { dismiss() } }
+                    ToolbarItem(placement: .primaryAction) {
+                        Stepper("Huruf \(fontSize)", value: $fontSize, in: 14...26, step: 2)
+                    }
+                }
+        }
+    }
+
+    private var readerHTML: String {
+        let safeTitle = title
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+        return """
+        <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>body{font-family:-apple-system,Georgia,serif;font-size:\(fontSize)px;line-height:1.65;color:#1c1c1e;padding:20px 22px 40px;max-width:720px;margin:0 auto;word-wrap:break-word;} h1{font-size:1.4em;line-height:1.3;} img{max-width:100%;height:auto;} a{color:#007aff;} pre,code{white-space:pre-wrap;word-wrap:break-word;} @media (prefers-color-scheme: dark){body{color:#f2f2f7;background:#000;}}</style>
+        </head><body><h1>\(safeTitle)</h1>\(articleHTML)</body></html>
+        """
     }
 }
 
@@ -2082,6 +2643,13 @@ struct AdBlockPanelView: View {
                     Text("Background dan PiP butuh mode audio di sistem; mematikannya mengembalikan perilaku normal browser (media berhenti saat aplikasi ditutup). YouTube bisa mengubah pemutarnya sewaktu-waktu, jadi fitur ini mungkin perlu penyesuaian lagi.").font(.caption).foregroundStyle(.secondary)
                     TextField("Home page", text: $store.browserSettings.homePage)
                         .autocapitalization(.none).autocorrectionDisabled()
+                }
+                Section("Konten") {
+                    Toggle("Blokir popup", isOn: $store.browserSettings.blockPopups)
+                    Toggle("Tampilkan pratinjau link (tekan lama)", isOn: $store.browserSettings.linkPreview)
+                    Toggle("Deteksi alamat (buka di Google Maps)", isOn: $store.browserSettings.detectAddresses)
+                    Toggle("Web Inspector (periksa dari Safari di Mac)", isOn: $store.browserSettings.webInspector)
+                    Text("Blokir popup menahan jendela yang dibuka script (window.open); tautan yang diketuk tetap dibuka. Deteksi alamat menandai alamat jalan di halaman menjadi tautan ke Google Maps untuk rute dan info lokal. Web Inspector memungkinkan Safari di Mac memeriksa halaman web ini.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Minta AI di browser") {
                     Picker("AI", selection: $store.browserSettings.aiProvider) {

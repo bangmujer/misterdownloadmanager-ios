@@ -20,6 +20,7 @@ final class DownloadStore: ObservableObject {
     @Published var remoteAddress: String?
     @Published var lastError: String?
     @Published var browserSettings = BrowserSettings()
+    @Published var browserHistory: [BrowserHistoryEntry] = []
 
     private var activeTasks: [UUID: Task<Void, Never>] = [:]
     private var schedulerTimer: Timer?
@@ -53,9 +54,41 @@ final class DownloadStore: ObservableObject {
         browserSettings = decoded
     }
 
+    // MARK: - Browser history
+
+    private var browserHistoryURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("mdm-browser-history.json")
+    }
+    func saveBrowserHistory() {
+        let capped = Array(browserHistory.suffix(500))
+        if let data = try? JSONEncoder().encode(capped) {
+            try? data.write(to: browserHistoryURL, options: .atomic)
+        }
+    }
+    private func loadBrowserHistory() {
+        guard let data = try? Data(contentsOf: browserHistoryURL),
+              let decoded = try? JSONDecoder().decode([BrowserHistoryEntry].self, from: data) else { return }
+        browserHistory = decoded
+    }
+    func recordHistory(title: String, urlString: String) {
+        if let last = browserHistory.last, last.urlString == urlString { return }
+        browserHistory.append(BrowserHistoryEntry(title: title, urlString: urlString))
+        if browserHistory.count > 500 { browserHistory.removeFirst(browserHistory.count - 500) }
+        saveBrowserHistory()
+    }
+    func removeHistoryEntry(id: UUID) {
+        browserHistory.removeAll { $0.id == id }
+        saveBrowserHistory()
+    }
+    func clearBrowserHistory() {
+        browserHistory = []
+        saveBrowserHistory()
+    }
+
     init() {
         load()
         loadBrowserSettings()
+        loadBrowserHistory()
         startTimers()
         if settings.autoResumeOnLaunch {
             for item in items where item.state == .downloading || item.state == .queued {
