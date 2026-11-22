@@ -539,21 +539,41 @@ final class BrowserSession: ObservableObject {
     """
 
     /// Enters Picture in Picture on the playing (or first) <video>.
+    /// Returns a JSON diagnostic so a failed attempt on-device says WHY:
+    /// video count, paused state, whether the webkit PiP function exists,
+    /// what webkitSupportsPresentationMode reported, and whether the
+    /// video carried a disablepictureinpicture attribute (removed first).
     static let pipScript = """
     (function(){
+      var out = {status: 'unknown', videos: 0, paused: true, hasFn: false, supports: null, disabled: false};
       var vids = Array.prototype.slice.call(document.querySelectorAll('video'));
-      if (!vids.length) return 'none';
+      out.videos = vids.length;
+      if (!vids.length) { out.status = 'none'; return JSON.stringify(out); }
       var v = null;
       for (var i = 0; i < vids.length; i++) { if (!vids[i].paused) { v = vids[i]; break; } }
       if (!v) v = vids[0];
-      try {
-        if (typeof v.webkitSetPresentationMode === 'function' && v.webkitSupportsPresentationMode && v.webkitSupportsPresentationMode('picture-in-picture')) {
-          v.webkitSetPresentationMode('picture-in-picture');
-          return 'pip';
-        }
-      } catch (e) {}
-      try { if (v.requestPictureInPicture) { var p = v.requestPictureInPicture(); if (p && p.catch) p.catch(function(){}); return 'pip'; } } catch (e2) {}
-      return 'unsupported';
+      out.paused = !!v.paused;
+      out.hasFn = (typeof v.webkitSetPresentationMode === 'function');
+      try { out.disabled = v.hasAttribute('disablepictureinpicture'); v.removeAttribute('disablepictureinpicture'); } catch (e) {}
+      try { if (typeof v.webkitSupportsPresentationMode === 'function') out.supports = v.webkitSupportsPresentationMode('picture-in-picture'); } catch (e2) {}
+      function attempt() {
+        try {
+          if (typeof v.webkitSetPresentationMode === 'function') {
+            v.webkitSetPresentationMode('picture-in-picture');
+            return true;
+          }
+        } catch (e3) {}
+        try { if (v.requestPictureInPicture) { var p = v.requestPictureInPicture(); if (p && p.catch) p.catch(function(){}); return true; } } catch (e4) {}
+        return false;
+      }
+      if (!v.paused) {
+        out.status = attempt() ? 'pip' : 'unsupported';
+        return JSON.stringify(out);
+      }
+      try { var pr = v.play(); if (pr && pr.catch) pr.catch(function(){}); } catch (e5) {}
+      setTimeout(function(){ attempt(); }, 500);
+      out.status = 'pip-playing';
+      return JSON.stringify(out);
     })()
     """
 
@@ -1032,12 +1052,29 @@ struct BrowserView: View {
 
     private func enterPictureInPicture() {
         session.evaluateJS(BrowserSession.pipScript) { result, _ in
-            let status = result as? String ?? ""
             DispatchQueue.main.async {
-                if status == "none" {
+                guard let str = result as? String,
+                      let data = str.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    capturedNotice = "PiP: tidak ada respons dari halaman."
+                    return
+                }
+                let status = json["status"] as? String ?? "unknown"
+                switch status {
+                case "none":
                     capturedNotice = "Tidak ada video di halaman ini."
-                } else if status == "unsupported" {
-                    capturedNotice = "Video ini tidak mendukung Picture in Picture."
+                case "pip":
+                    capturedNotice = "Picture in Picture aktif."
+                case "pip-playing":
+                    capturedNotice = "Memutar video + Picture in Picture…"
+                case "unsupported":
+                    let hasFn = (json["hasFn"] as? Bool) ?? false
+                    var supportsText = "-"
+                    if let b = json["supports"] as? Bool { supportsText = b ? "ya" : "tidak" }
+                    let paused = (json["paused"] as? Bool) ?? false
+                    capturedNotice = "PiP tidak didukung video ini (webkit: \(hasFn ? "ya" : "tidak"), support: \(supportsText), paused: \(paused ? "ya" : "tidak"))."
+                default:
+                    capturedNotice = "PiP: status tidak dikenal."
                 }
             }
         }

@@ -37,9 +37,12 @@ targets:
         INFOPLIST_KEY_UIFileSharingEnabled: YES
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         INFOPLIST_KEY_NSAllowsArbitraryLoads: YES
-        # "audio" is required for background media playback + Picture in Picture
-        # (space-separated modes become the UIBackgroundModes array).
-        INFOPLIST_KEY_UIBackgroundModes: "fetch audio"
+        # "audio" is required for background media playback + Picture in
+        # Picture. The value must use Xcode's own parenthesised-list form
+        # (as Xcode itself writes it: "(audio)"); a plain string does NOT
+        # become the UIBackgroundModes array, which silently disabled
+        # background audio and PiP entirely.
+        INFOPLIST_KEY_UIBackgroundModes: "(audio)"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: NO
