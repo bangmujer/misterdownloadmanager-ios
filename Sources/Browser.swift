@@ -4376,7 +4376,11 @@ struct ReaderView: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Tutup") { dismiss() } }
                     ToolbarItem(placement: .primaryAction) {
-                        Stepper("Huruf \(fontSize)", value: $fontSize, in: 14...26, step: 2)
+                        HStack {
+                            Text("Huruf \(fontSize)")
+                            Slider(value: Binding(get: { Double(fontSize) }, set: { fontSize = Int($0) }), in: 14...26, step: 2)
+                                .frame(width: 120)
+                        }
                     }
                 }
         }

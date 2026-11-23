@@ -252,7 +252,11 @@ struct AddURLView: View {
                     Picker("Category", selection: $category) {
                         ForEach(DownloadCategory.allCases.filter { $0 != .all }) { Text($0.rawValue).tag($0) }
                     }
-                    Stepper("Connections: \(connections)", value: $connections, in: 1...60)
+                    HStack {
+                        Text("Connections")
+                        Slider(value: Binding(get: { Double(connections) }, set: { connections = Int($0) }), in: 1...60, step: 1)
+                        Text("\(connections)").frame(width: 28, alignment: .trailing)
+                    }
                     TextField("Referer (optional)", text: $referer)
                 }
                 Section("Checksum (optional)") {

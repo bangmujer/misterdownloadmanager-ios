@@ -3,6 +3,65 @@ import QuickLook
 import UniformTypeIdentifiers
 
 // MARK: - Settings
+
+/// A fill-in numeric field for Settings rows: type the number directly
+/// instead of tapping a stepper. Digits are committed as typed; the value
+/// is clamped to the range when editing ends (live clamping would fight
+/// typing, e.g. a port starting with "8" is below the 1024 minimum).
+private struct IntField: View {
+    var label: String
+    @Binding var value: Int
+    var range: ClosedRange<Int>
+    var suffix: String = ""
+    @State private var text: String
+    @FocusState private var focused: Bool
+
+    init(_ label: String, value: Binding<Int>, in range: ClosedRange<Int>, suffix: String = "") {
+        self.label = label
+        self._value = value
+        self.range = range
+        self.suffix = suffix
+        self._text = State(initialValue: String(value.wrappedValue))
+    }
+
+    var body: some View {
+        HStack {
+            Text(label)
+            Spacer()
+            TextField("", text: $text)
+                .keyboardType(.numberPad)
+                .multilineTextAlignment(.trailing)
+                .focused($focused)
+                .frame(width: 80)
+                .onChange(of: text) { newValue in
+                    let digits = newValue.filter(\.isNumber)
+                    if digits != newValue { text = digits; return }
+                    if let n = Int(digits) { value = n }
+                }
+                .onChange(of: focused) { isFocused in
+                    if !isFocused { commit() }
+                }
+                .onChange(of: value) { newValue in
+                    if !focused, text != String(newValue) { text = String(newValue) }
+                }
+                .onDisappear { commit() }
+            if !suffix.isEmpty { Text(suffix).foregroundStyle(.secondary) }
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Selesai") { focused = false }
+            }
+        }
+    }
+
+    private func commit() {
+        let clamped = min(max(value, range.lowerBound), range.upperBound)
+        if clamped != value { value = clamped }
+        if text != String(clamped) { text = String(clamped) }
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
@@ -15,9 +74,15 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("Download") {
-                    Stepper("Max connections per download: \(store.settings.maxConnections)", value: $store.settings.maxConnections, in: 1...60)
-                    Stepper("Max concurrent downloads: \(store.settings.maxConcurrentDownloads)", value: $store.settings.maxConcurrentDownloads, in: 1...5)
-                    Stepper("Speed limit: \(store.settings.speedLimitKBps == 0 ? "Unlimited" : "\(store.settings.speedLimitKBps) KB/s")", value: $store.settings.speedLimitKBps, in: 0...100000, step: 100)
+                    HStack {
+                        Text("Max connections per download")
+                        Slider(value: Binding(get: { Double(store.settings.maxConnections) }, set: { store.settings.maxConnections = Int($0) }), in: 1...60, step: 1)
+                        Text("\(store.settings.maxConnections)").frame(width: 28, alignment: .trailing)
+                    }
+                    Picker("Max concurrent downloads", selection: $store.settings.maxConcurrentDownloads) {
+                        ForEach(1...5, id: \.self) { Text("\($0)").tag($0) }
+                    }
+                    IntField("Speed limit (KB/s, 0 = unlimited)", value: $store.settings.speedLimitKBps, in: 0...100000, suffix: "KB/s")
                     Toggle("Start downloads paused", isOn: $store.settings.startPaused)
                     Toggle("Auto-resume on launch", isOn: $store.settings.autoResumeOnLaunch)
                     TextField("User-Agent", text: $store.settings.userAgent)
@@ -25,8 +90,12 @@ struct SettingsView: View {
                 Section("Queue & Scheduler") {
                     Toggle("Queue enabled", isOn: $store.settings.queueEnabled)
                     Toggle("Scheduler enabled", isOn: $store.settings.schedulerEnabled)
-                    Stepper("Start: \(store.settings.schedulerStartHour):\(String(format: "%02d", store.settings.schedulerStartMinute))", value: $store.settings.schedulerStartHour, in: 0...23)
-                    Stepper("Stop: \(store.settings.schedulerStopHour):\(String(format: "%02d", store.settings.schedulerStopMinute))", value: $store.settings.schedulerStopHour, in: 0...23)
+                    Picker("Start", selection: $store.settings.schedulerStartHour) {
+                        ForEach(0..<24, id: \.self) { Text("\($0):\(String(format: "%02d", store.settings.schedulerStartMinute))").tag($0) }
+                    }
+                    Picker("Stop", selection: $store.settings.schedulerStopHour) {
+                        ForEach(0..<24, id: \.self) { Text("\($0):\(String(format: "%02d", store.settings.schedulerStopMinute))").tag($0) }
+                    }
                     Text("iOS cannot wake the phone or shut it down like the desktop scheduler. The window only gates starting/pausing while the app runs, and background downloads are limited by iOS.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Penyimpanan") {
@@ -54,7 +123,7 @@ struct SettingsView: View {
                     Toggle("Use proxy", isOn: $store.settings.proxyEnabled)
                     Picker("Proxy type", selection: $store.settings.proxyType) { Text("HTTP").tag("HTTP"); Text("SOCKS").tag("SOCKS") }
                     TextField("Proxy host", text: $store.settings.proxyHost)
-                    Stepper("Proxy port: \(store.settings.proxyPort)", value: $store.settings.proxyPort, in: 1...65535)
+                    IntField("Proxy port", value: $store.settings.proxyPort, in: 1...65535)
                     TextField("Custom DNS (stored only)", text: $store.settings.customDNS)
                     Text("iOS URLSession cannot override DNS per app, so a custom DNS value is stored for reference only and does not change resolution.").font(.caption).foregroundStyle(.secondary)
                 }
@@ -74,7 +143,7 @@ struct SettingsView: View {
                 }
                 Section("Remote control (LAN)") {
                     Toggle("Enable remote control", isOn: $store.settings.remoteControlEnabled)
-                    Stepper("Port: \(store.settings.remotePort)", value: $store.settings.remotePort, in: 1024...65535)
+                    IntField("Port", value: $store.settings.remotePort, in: 1024...65535)
                     if let addr = store.remoteAddress { LabeledContent("Address", value: addr) }
                     Text("Plain HTTP on trusted home Wi-Fi only, while the app is in the foreground. The desktop remote uses HTTPS pairing; that pairing flow is not ported.").font(.caption).foregroundStyle(.secondary)
                 }
