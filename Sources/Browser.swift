@@ -165,6 +165,42 @@ struct BrowserSettings: Codable {
     var effectiveUserAgent: String? {
         UserAgentPreset(rawValue: userAgentPreset)?.uaString
     }
+
+    /// www-insensitive, subdomain-aware match against a per-site list,
+    /// the same rule the zoom and host-list toggles use.
+    private func siteEntryMatches(_ host: String, _ entry: String) -> Bool {
+        func bare(_ s: String) -> String {
+            var h = BrowserSession.cleanHostEntry(s)
+            if h.hasPrefix("www.") { h = String(h.dropFirst(4)) }
+            return h
+        }
+        let h = bare(host), b = bare(entry)
+        return !b.isEmpty && (h == b || h.hasSuffix("." + b))
+    }
+
+    func isSiteConfigEnabled(for host: String) -> Bool {
+        siteConfigEnabled.contains { siteEntryMatches(host, $0) }
+    }
+
+    func siteUAOverride(for host: String) -> UserAgentPreset? {
+        guard isSiteConfigEnabled(for: host) else { return nil }
+        for (key, rawValue) in siteUserAgent where siteEntryMatches(host, key) {
+            if let preset = UserAgentPreset(rawValue: rawValue) { return preset }
+        }
+        return nil
+    }
+
+    func isSiteDesktopMode(for host: String) -> Bool {
+        isSiteConfigEnabled(for: host) && siteDesktopMode.contains { siteEntryMatches(host, $0) }
+    }
+
+    func areSiteImagesBlocked(for host: String) -> Bool {
+        isSiteConfigEnabled(for: host) && siteImagesBlocked.contains { siteEntryMatches(host, $0) }
+    }
+
+    func isSiteJavaScriptBlocked(for host: String) -> Bool {
+        isSiteConfigEnabled(for: host) && siteJavaScriptBlocked.contains { siteEntryMatches(host, $0) }
+    }
     var searchEngine: String = "Google"
     // Media: background playback (incl. YouTube) + Picture in Picture.
     // Both default ON and can be switched off in settings.
@@ -205,6 +241,15 @@ struct BrowserSettings: Codable {
     var httpsOnly: Bool = false
     // Hosts exempt from tracking protection / blocking.
     var siteExceptions: [String] = []
+
+    // Per-site configuration (Via-style Site configuration screen, opened
+    // from the shield popup): the master switch + per-host overrides.
+    // A missing entry means "follow the global default".
+    var siteConfigEnabled: [String] = []
+    var siteUserAgent: [String: String] = [:]
+    var siteDesktopMode: [String] = []
+    var siteImagesBlocked: [String] = []
+    var siteJavaScriptBlocked: [String] = []
     // Browser gestures (Reynard lets each gesture be toggled individually).
     var gestureEdgeSwipe: Bool = true
     var gesturePullRefresh: Bool = true
@@ -380,6 +425,18 @@ enum AdBlockRules {
                                           "resource-type": ["script", "image", "xmlhttprequest", "media", "font", "websocket"]],
                               "action": ["type": "block"]])
             }
+        }
+        // Per-site image blocking (Site configuration): image loads are
+        // blocked only while the top page is one of the listed hosts.
+        // These come before the allowlist/exception rules so an explicit
+        // allowlist entry can still win, like everywhere else.
+        for host in settings.siteImagesBlocked where settings.isSiteConfigEnabled(for: host) {
+            var h = BrowserSession.cleanHostEntry(host)
+            if h.hasPrefix("www.") { h = String(h.dropFirst(4)) }
+            guard !h.isEmpty else { continue }
+            let patterns = ["*://" + h + "/*", "*://*." + h + "/*"]
+            rules.append(["trigger": ["url-filter": ".*", "resource-type": ["image"], "if-top-url": patterns],
+                          "action": ["type": "block"]])
         }
         for line in settings.customAllowFilters {
             if let r = regex(for: line) { rules.append(allowRule(pattern: r)) }
@@ -991,8 +1048,25 @@ final class BrowserSession: ObservableObject {
                     // Compatibility pages always use the default (mobile
                     // Safari) user agent: a desktop UA can make a video
                     // site serve Widevine instead of FairPlay, which iOS
-                    // cannot play at all.
-                    webView.customUserAgent = compat ? nil : settings.effectiveUserAgent
+                    // cannot play at all. Otherwise the Site configuration
+                    // for this host wins (desktop mode, then its own
+                    // user-agent choice), then the global preset.
+                    let pageHost = webView.url?.host
+                    if compat {
+                        webView.customUserAgent = nil
+                    } else if let pageHost, settings.isSiteDesktopMode(for: pageHost) {
+                        webView.customUserAgent = UserAgentPreset.mac.uaString
+                    } else if let pageHost, let preset = settings.siteUAOverride(for: pageHost) {
+                        webView.customUserAgent = preset.uaString
+                    } else {
+                        webView.customUserAgent = settings.effectiveUserAgent
+                    }
+                    // Per-site JavaScript switch (Site configuration). The
+                    // preference sticks to this tab's web view, so leaving
+                    // the host restores the default on the next commit.
+                    if let pageHost {
+                        webView.configuration.preferences.javaScriptEnabled = !settings.isSiteJavaScriptBlocked(for: pageHost)
+                    }
     }
 
     func findMedia() {
@@ -2044,6 +2118,9 @@ struct BrowserView: View {
     @State private var addressDraft = ""
     @State private var isEditingAddress = false
     @State private var showingAdBlock = false
+    @State private var showingSiteInfo = false
+    @State private var showingCookies = false
+    @State private var showingSiteConfig = false
     @State private var showingMedia = false
     @State private var showingOverview = false
     @State private var showingAI = false
@@ -2339,6 +2416,16 @@ struct BrowserView: View {
                     .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 3) { capturedNotice = nil } }
             }
         }
+        .overlay {
+            if showingSiteInfo {
+                ZStack(alignment: .top) {
+                    Color.black.opacity(0.001)
+                        .ignoresSafeArea()
+                        .onTapGesture { showingSiteInfo = false }
+                    siteInfoPopup
+                }
+            }
+        }
         .onAppear {
             session.onDownloadCaptured = { url in
                 let item = store.addItem(urlString: url.absoluteString)
@@ -2396,6 +2483,12 @@ struct BrowserView: View {
             AdBlockPanelView()
                 .presentationDetents([.height(240)])
                 .presentationDragIndicator(.hidden)
+        }
+        .sheet(isPresented: $showingCookies) {
+            CookiesView(dataStore: cookieStore, host: currentCleanHost)
+        }
+        .sheet(isPresented: $showingSiteConfig) {
+            SiteConfigView(host: currentCleanHost)
         }
         .sheet(isPresented: $showingMedia) {
             NavigationStack {
@@ -2513,9 +2606,81 @@ struct BrowserView: View {
         .padding(.bottom, 10)
     }
 
+    /// Via-style site popup from the shield button: the site's title and
+    /// URL, then the three site actions (cookies, site configuration,
+    /// reader mode). Tapping anywhere outside dismisses it.
+    private var siteInfoPopup: some View {
+        let tab = session.selectedTab
+        let title = tab?.title ?? "Situs ini"
+        let urlString = tab?.urlString ?? ""
+        let shareURL = (tab?.urlString).flatMap { URL(string: $0) }.flatMap { $0.scheme != nil ? $0 : nil }
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: store.browserSettings.adBlockEnabled || store.browserSettings.customAdBlockEnabled ? "shield.fill" : "shield")
+                    .foregroundStyle(.blue)
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer()
+                Button { session.reload() } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .foregroundStyle(.primary)
+                }
+            }
+            HStack(alignment: .top, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline)
+                    siteURLText(urlString)
+                        .font(.subheadline)
+                        .lineLimit(2)
+                }
+                Spacer()
+                if let shareURL {
+                    Button { shareURLExternally(shareURL) } label: {
+                        Image(systemName: "square.and.arrow.up")
+                            .foregroundStyle(.primary)
+                    }
+                }
+            }
+            VStack(alignment: .leading, spacing: 12) {
+                Button("Lihat cookie") { showingSiteInfo = false; showingCookies = true }
+                if !currentCleanHost.isEmpty {
+                    Button("Konfigurasi situs") { showingSiteInfo = false; showingSiteConfig = true }
+                }
+                Button("Mode Baca") { showingSiteInfo = false; openReaderMode() }
+                    .disabled(tab?.showsStartPage == true)
+            }
+            .font(.subheadline)
+            .foregroundStyle(.blue)
+        }
+        .padding(16)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.2), radius: 16, y: 4)
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+    }
+
+    /// The popup's URL line: Via colours the https scheme green.
+    private func siteURLText(_ urlString: String) -> Text {
+        if urlString.hasPrefix("https://") {
+            return Text("https").foregroundColor(.green) + Text(String(urlString.dropFirst(5)))
+        }
+        return Text(urlString)
+    }
+
+    private var currentCleanHost: String {
+        BrowserSession.cleanHostEntry(session.selectedTab?.host ?? "")
+    }
+
+    private var cookieStore: WKWebsiteDataStore {
+        session.webViews[session.selectedID]?.configuration.websiteDataStore ?? WKWebsiteDataStore.default()
+    }
+
     private var addressPill: some View {
         HStack(spacing: 8) {
-            Button { showingAdBlock = true } label: {
+            Button { showingSiteInfo.toggle() } label: {
                 Image(systemName: store.browserSettings.adBlockEnabled || store.browserSettings.customAdBlockEnabled ? "shield.fill" : "shield")
                     .foregroundStyle(.blue)
             }
@@ -4443,6 +4608,271 @@ struct AdBlockPanelView: View {
             return
         }
         scriptImportResult = store.importUserscript(source: source, fileName: url.lastPathComponent)
+    }
+}
+
+/// Via-style "Site configuration": a master switch for this host plus
+/// the CONTENT overrides (user agent, desktop mode, images, JavaScript).
+/// Everything follows the global default until the switch is on and a
+/// value is picked; Reset clears the host's overrides.
+struct SiteConfigView: View {
+    @EnvironmentObject var store: DownloadStore
+    @Environment(\.dismiss) var dismiss
+    let host: String
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack {
+                        Text(host)
+                        Spacer()
+                        Toggle("", isOn: enabledBinding).labelsHidden()
+                    }
+                }
+                Section("CONTENT") {
+                    NavigationLink {
+                        SiteOptionPicker(title: "User-Agent", options: uaOptions, selection: uaSelection)
+                    } label: {
+                        HStack { Text("User-Agent"); Spacer(); Text(uaValueLabel).foregroundStyle(.secondary) }
+                    }
+                    .disabled(!isEnabled)
+                    NavigationLink {
+                        SiteOptionPicker(title: "Desktop mode", options: [("default", "Default"), ("on", "On"), ("off", "Off")], selection: desktopSelection)
+                    } label: {
+                        HStack { Text("Desktop mode"); Spacer(); Text(desktopValueLabel).foregroundStyle(.secondary) }
+                    }
+                    .disabled(!isEnabled)
+                    NavigationLink {
+                        SiteOptionPicker(title: "Images", options: [("default", "Default"), ("allowed", "Allowed"), ("blocked", "Blocked")], selection: imagesSelection)
+                    } label: {
+                        HStack { Text("Images"); Spacer(); Text(imagesValueLabel).foregroundStyle(.secondary) }
+                    }
+                    .disabled(!isEnabled)
+                    NavigationLink {
+                        SiteOptionPicker(title: "JavaScript", options: [("default", "Default"), ("allowed", "Allowed"), ("blocked", "Blocked")], selection: javaScriptSelection)
+                    } label: {
+                        HStack { Text("JavaScript"); Spacer(); Text(javaScriptValueLabel).foregroundStyle(.secondary) }
+                    }
+                    .disabled(!isEnabled)
+                }
+                Section {
+                    Button("Reset", role: .destructive) { reset() }
+                        .disabled(!hasOverrides)
+                }
+            }
+            .navigationTitle("Site configuration")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+    }
+
+    private func bare(_ s: String) -> String {
+        var h = BrowserSession.cleanHostEntry(s)
+        if h.hasPrefix("www.") { h = String(h.dropFirst(4)) }
+        return h
+    }
+
+    private func matchesBare(_ entry: String, _ host: String) -> Bool {
+        let b = bare(entry), h = bare(host)
+        return !b.isEmpty && (h == b || h.hasSuffix("." + b))
+    }
+
+    private var isEnabled: Bool { store.browserSettings.isSiteConfigEnabled(for: host) }
+
+    private var enabledBinding: Binding<Bool> {
+        Binding(get: { isEnabled }, set: { newValue in
+            let key = BrowserSession.cleanHostEntry(host)
+            var list = store.browserSettings.siteConfigEnabled
+            list.removeAll { matchesBare($0, host) }
+            if newValue { list.append(key) }
+            store.browserSettings.siteConfigEnabled = list
+            store.saveBrowserSettings()
+        })
+    }
+
+    private var hasOverrides: Bool {
+        isEnabled
+            || store.browserSettings.siteUserAgent.keys.contains { matchesBare($0, host) }
+            || store.browserSettings.siteDesktopMode.contains { matchesBare($0, host) }
+            || store.browserSettings.siteImagesBlocked.contains { matchesBare($0, host) }
+            || store.browserSettings.siteJavaScriptBlocked.contains { matchesBare($0, host) }
+    }
+
+    private func reset() {
+        store.browserSettings.siteConfigEnabled = store.browserSettings.siteConfigEnabled.filter { !matchesBare($0, host) }
+        store.browserSettings.siteUserAgent = store.browserSettings.siteUserAgent.filter { !matchesBare($0.key, host) }
+        store.browserSettings.siteDesktopMode = store.browserSettings.siteDesktopMode.filter { !matchesBare($0, host) }
+        store.browserSettings.siteImagesBlocked = store.browserSettings.siteImagesBlocked.filter { !matchesBare($0, host) }
+        store.browserSettings.siteJavaScriptBlocked = store.browserSettings.siteJavaScriptBlocked.filter { !matchesBare($0, host) }
+        store.saveBrowserSettings()
+    }
+
+    private func uaShortLabel(_ preset: UserAgentPreset) -> String {
+        switch preset {
+        case .iphone: return "Safari iPhone"
+        case .ipad: return "Safari iPad"
+        case .mac: return "Safari Mac"
+        case .chromeWindows: return "Chrome Windows"
+        case .chromeAndroid: return "Chrome Android"
+        case .firefoxWindows: return "Firefox Windows"
+        default: return "Default"
+        }
+    }
+
+    private var globalUALabel: String {
+        uaShortLabel(UserAgentPreset(rawValue: store.browserSettings.userAgentPreset) ?? .default)
+    }
+
+    private var uaOptions: [(id: String, label: String)] {
+        [("default", "Default")] + UserAgentPreset.allCases.map { ($0.rawValue, uaShortLabel($0)) }
+    }
+
+    private var uaValueLabel: String {
+        if isEnabled {
+            for (key, raw) in store.browserSettings.siteUserAgent where matchesBare(key, host) {
+                return uaShortLabel(UserAgentPreset(rawValue: raw) ?? .default)
+            }
+        }
+        return "\(globalUALabel) (default)"
+    }
+
+    private var uaSelection: Binding<String> {
+        Binding(get: {
+            for (key, raw) in store.browserSettings.siteUserAgent where matchesBare(key, host) { return raw }
+            return "default"
+        }, set: { newValue in
+            let key = BrowserSession.cleanHostEntry(host)
+            store.browserSettings.siteUserAgent = store.browserSettings.siteUserAgent.filter { !matchesBare($0.key, host) }
+            if newValue != "default" { store.browserSettings.siteUserAgent[key] = newValue }
+            store.saveBrowserSettings()
+        })
+    }
+
+    private var desktopValueLabel: String {
+        store.browserSettings.isSiteDesktopMode(for: host) ? "On" : "Off (default)"
+    }
+
+    private var desktopSelection: Binding<String> {
+        Binding(get: { store.browserSettings.isSiteDesktopMode(for: host) ? "on" : "default" }, set: { newValue in
+            let key = BrowserSession.cleanHostEntry(host)
+            var list = store.browserSettings.siteDesktopMode
+            list.removeAll { matchesBare($0, host) }
+            if newValue == "on" { list.append(key) }
+            store.browserSettings.siteDesktopMode = list
+            store.saveBrowserSettings()
+        })
+    }
+
+    private var imagesValueLabel: String {
+        store.browserSettings.areSiteImagesBlocked(for: host) ? "Blocked" : "Allowed (default)"
+    }
+
+    private var imagesSelection: Binding<String> {
+        Binding(get: { store.browserSettings.areSiteImagesBlocked(for: host) ? "blocked" : "default" }, set: { newValue in
+            let key = BrowserSession.cleanHostEntry(host)
+            var list = store.browserSettings.siteImagesBlocked
+            list.removeAll { matchesBare($0, host) }
+            if newValue == "blocked" { list.append(key) }
+            store.browserSettings.siteImagesBlocked = list
+            store.saveBrowserSettings()
+        })
+    }
+
+    private var javaScriptValueLabel: String {
+        store.browserSettings.isSiteJavaScriptBlocked(for: host) ? "Blocked" : "Allowed (default)"
+    }
+
+    private var javaScriptSelection: Binding<String> {
+        Binding(get: { store.browserSettings.isSiteJavaScriptBlocked(for: host) ? "blocked" : "default" }, set: { newValue in
+            let key = BrowserSession.cleanHostEntry(host)
+            var list = store.browserSettings.siteJavaScriptBlocked
+            list.removeAll { matchesBare($0, host) }
+            if newValue == "blocked" { list.append(key) }
+            store.browserSettings.siteJavaScriptBlocked = list
+            store.saveBrowserSettings()
+        })
+    }
+}
+
+private struct SiteOptionPicker: View {
+    let title: String
+    let options: [(id: String, label: String)]
+    @Binding var selection: String
+
+    var body: some View {
+        List {
+            ForEach(options, id: \.id) { option in
+                Button {
+                    selection = option.id
+                } label: {
+                    HStack {
+                        Text(option.label)
+                        Spacer()
+                        if selection == option.id {
+                            Image(systemName: "checkmark").foregroundStyle(.blue)
+                        }
+                    }
+                }
+                .foregroundStyle(.primary)
+            }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// The current site's cookies (Via's "View cookies"): name, domain, value
+/// and expiry, with swipe-to-delete. Only this host's cookies are shown.
+struct CookiesView: View {
+    @Environment(\.dismiss) var dismiss
+    let dataStore: WKWebsiteDataStore
+    let host: String
+    @State private var cookies: [HTTPCookie] = []
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if cookies.isEmpty {
+                    Text("Tidak ada cookie untuk situs ini.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(Array(cookies.enumerated()), id: \.offset) { _, cookie in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(cookie.name).font(.headline)
+                        Text(cookie.domain).font(.subheadline).foregroundStyle(.secondary)
+                        if !cookie.value.isEmpty {
+                            Text(cookie.value).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                        if let expires = cookie.expiresDate {
+                            Text("Berlaku sampai \(expires.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .onDelete(perform: delete)
+            }
+            .navigationTitle("Cookie")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Selesai") { dismiss() } } }
+            .task { load() }
+        }
+    }
+
+    private func load() {
+        dataStore.httpCookieStore.getAllCookies { list in
+            let h = BrowserSession.cleanHostEntry(host)
+            cookies = list.filter { cookie in
+                var d = cookie.domain.lowercased()
+                if d.hasPrefix(".") { d = String(d.dropFirst()) }
+                return !d.isEmpty && (h == d || h.hasSuffix("." + d))
+            }.sorted { ($0.domain, $0.name) < ($1.domain, $1.name) }
+        }
+    }
+
+    private func delete(at offsets: IndexSet) {
+        for index in offsets { dataStore.httpCookieStore.deleteCookie(cookies[index]) }
+        cookies.remove(atOffsets: offsets)
     }
 }
 
