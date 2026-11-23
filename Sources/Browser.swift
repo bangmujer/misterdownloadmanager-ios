@@ -93,9 +93,10 @@ struct BrowserExtension: Identifiable, Codable, Equatable {
     /// @name becomes the extension name, @run-at document-start picks
     /// "Awal dokumen" timing, @match/@include limit the pages, @exclude
     /// removes pages.
-    static func userscriptMeta(_ source: String) -> (name: String?, atStart: Bool, matches: [String], excludes: [String]) {
+    static func userscriptMeta(_ source: String) -> (name: String?, atStart: Bool, hasRunAt: Bool, matches: [String], excludes: [String]) {
         var name: String?
         var atStart = false
+        var hasRunAt = false
         var matches: [String] = []
         var excludes: [String] = []
         for line in source.components(separatedBy: .newlines).prefix(50) {
@@ -109,13 +110,13 @@ struct BrowserExtension: Identifiable, Codable, Equatable {
             guard parts.count == 2 else { continue }
             switch parts[0] {
             case "@name": name = String(parts[1])
-            case "@run-at": atStart = parts[1].lowercased().contains("document-start")
+            case "@run-at": hasRunAt = true; atStart = parts[1].lowercased().contains("document-start")
             case "@match", "@include": matches.append(String(parts[1]))
             case "@exclude": excludes.append(String(parts[1]))
             default: break
             }
         }
-        return (name, atStart, matches, excludes)
+        return (name, atStart, hasRunAt, matches, excludes)
     }
 
     static let builtins: [BrowserExtension] = [
@@ -5127,7 +5128,10 @@ struct AdBlockPanelView: View {
                 Text("Userscript jalan di dalam browser ini saja, tidak bisa melihat aplikasi lain.").font(.caption).foregroundStyle(.secondary)
             }
             .navigationTitle("Ekstensi")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Selesai") { store.saveBrowserSettings(); dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) { EditButton() }
+                ToolbarItem(placement: .confirmationAction) { Button("Selesai") { store.saveBrowserSettings(); dismiss() } }
+            }
             .sheet(isPresented: $showingNewExtension) { NewExtensionView() }
             .sheet(item: $editingExtension) { ext in EditExtensionView(ext: ext) }
         }
@@ -5526,8 +5530,14 @@ struct NewExtensionView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
-                        guard !name.isEmpty, !source.isEmpty else { return }
-                        store.browserSettings.extensions.append(BrowserExtension(name: name, source: source, enabled: true, atDocumentStart: atDocumentStart))
+                        guard !source.isEmpty else { return }
+                        // A pasted userscript carries its own header: honour
+                        // its @name/@run-at/@match/@exclude instead of
+                        // running it on every page. The typed name and the
+                        // timing picker only fill gaps the header leaves.
+                        let meta = BrowserExtension.userscriptMeta(source)
+                        let finalName = name.isEmpty ? (meta.name ?? "Extension") : name
+                        store.browserSettings.extensions.append(BrowserExtension(name: finalName, source: source, enabled: true, atDocumentStart: meta.hasRunAt ? meta.atStart : atDocumentStart, matches: meta.matches, excludes: meta.excludes))
                         store.saveBrowserSettings()
                         dismiss()
                     }
@@ -5544,6 +5554,7 @@ struct EditExtensionView: View {
     @State private var name: String
     @State private var source: String
     @State private var atDocumentStart: Bool
+    @State private var showingDeleteConfirm = false
 
     init(ext: BrowserExtension) {
         extensionID = ext.id
@@ -5563,17 +5574,36 @@ struct EditExtensionView: View {
                 }
                 .pickerStyle(.segmented)
                 Text("Awal dokumen: script jalan sebelum halaman dimuat. Akhir dokumen: script jalan setelah halaman selesai dimuat.").font(.caption).foregroundStyle(.secondary)
+                Text("Header userscript di dalam kode (@name, @run-at, @match, @exclude) dibaca ulang saat disimpan — mengubahnya di sini mengubah halaman dan waktu jalan script-nya.").font(.caption).foregroundStyle(.secondary)
+                Button("Hapus ekstensi", role: .destructive) { showingDeleteConfirm = true }
             }
             .navigationTitle("Ubah extension")
+            .alert("Hapus ekstensi ini?", isPresented: $showingDeleteConfirm) {
+                Button("Hapus", role: .destructive) {
+                    store.browserSettings.extensions.removeAll { $0.id == extensionID }
+                    store.saveBrowserSettings()
+                    dismiss()
+                }
+                Button("Batal", role: .cancel) {}
+            } message: {
+                Text("Script \"\(name)\" akan dihapus dari daftar ekstensi.")
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Batal") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Simpan") {
                         guard !name.isEmpty, !source.isEmpty else { return }
                         if let idx = store.browserSettings.extensions.firstIndex(where: { $0.id == extensionID }) {
+                            // Re-read the header: edits to @match/@exclude/
+                            // @run-at inside the source take effect, so an
+                            // imported script can be retargeted here. The
+                            // timing picker only fills a missing @run-at.
+                            let meta = BrowserExtension.userscriptMeta(source)
                             store.browserSettings.extensions[idx].name = name
                             store.browserSettings.extensions[idx].source = source
-                            store.browserSettings.extensions[idx].atDocumentStart = atDocumentStart
+                            store.browserSettings.extensions[idx].atDocumentStart = meta.hasRunAt ? meta.atStart : atDocumentStart
+                            store.browserSettings.extensions[idx].matches = meta.matches
+                            store.browserSettings.extensions[idx].excludes = meta.excludes
                             store.saveBrowserSettings()
                         }
                         dismiss()
