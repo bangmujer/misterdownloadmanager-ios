@@ -2012,13 +2012,23 @@ struct FaviconView: View {
 func resolveAddressInput(_ raw: String, engine: String) -> URL? {
     let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else { return nil }
-    if text.contains(" ") || (!text.contains(".") && URL(string: text)?.scheme == nil) {
+    let lower = text.lowercased()
+    let looksLikeHost = text.contains(".") || lower.hasPrefix("localhost")
+    if text.contains(" ") || (!looksLikeHost && URL(string: text)?.scheme == nil) {
         return SearchEngine.searchURL(for: engine, query: text)
     }
     if text.hasPrefix("http://") || text.hasPrefix("https://") {
         return URL(string: text)
     }
-    return URL(string: "https://" + text)
+    // Bare IP literals (10.128.4.218:5000), localhost and .local hosts are
+    // plain-HTTP LAN servers — forcing https:// breaks them outright, so
+    // they get http://. Everything else keeps the https:// default.
+    let hostPart = lower.split(separator: "/", maxSplits: 1).first ?? Substring(lower)
+    let host = hostPart.split(separator: ":").first.map(String.init) ?? ""
+    let octets = host.split(separator: ".")
+    let isIPLiteral = octets.count == 4 && octets.allSatisfy { Int($0) != nil }
+    let isLocal = isIPLiteral || host == "localhost" || host.hasSuffix(".local")
+    return URL(string: (isLocal ? "http://" : "https://") + text)
 }
 
 // MARK: - Browser UI (Safari-style floating navbar + Chrome-style overview)
