@@ -446,6 +446,9 @@ final class BrowserSession: ObservableObject {
     private var lastHistoryURL: [UUID: String] = [:]
     var onDownloadCaptured: ((URL) -> Void)?
     var onMediaFound: (([URL]) -> Void)?
+    // Link long-press menu actions (set by the browser view).
+    var onBookmarkAdd: ((String, String) -> Void)?
+    var onReadingListAdd: ((String, String) -> Void)?
     // DevTools (F12) state, fed by the in-page bridge script.
     var onDevToolsMessage: ((UUID, [String: Any]) -> Void)?
     @Published var consoleLogs: [UUID: [DevConsoleEntry]] = [:]
@@ -618,6 +621,11 @@ final class BrowserSession: ObservableObject {
 
     func goBack() { webViews[selectedID]?.goBack() }
     func goForward() { webViews[selectedID]?.goForward() }
+    /// Back/forward history entries of the selected tab, for the
+    /// long-press history menus (Safari/Chrome behaviour).
+    func backListItems() -> [WKBackForwardListItem] { webViews[selectedID]?.backForwardList.backList ?? [] }
+    func forwardListItems() -> [WKBackForwardListItem] { webViews[selectedID]?.backForwardList.forwardList ?? [] }
+    func go(to item: WKBackForwardListItem) { webViews[selectedID]?.go(to: item) }
     func reload() { webViews[selectedID]?.reload() }
     func hardReload() { webViews[selectedID]?.reloadFromOrigin() }
     func stop() { webViews[selectedID]?.stopLoading() }
@@ -1725,6 +1733,60 @@ struct BrowserWebView: UIViewRepresentable {
             return nil
         }
 
+        // Link long-press menu (Safari/Chrome parity): open, open in a
+        // new (or private) tab, download the linked file, copy/share the
+        // link, bookmark, reading list. Returning nil for non-link
+        // elements keeps WebKit's built-in menu (images, etc.).
+        func webView(_ webView: WKWebView, contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo,
+                     completionHandler: @escaping (UIContextMenuConfiguration?) -> Void) {
+            guard let linkURL = elementInfo.linkURL else { completionHandler(nil); return }
+            let configuration = UIContextMenuConfiguration(identifier: linkURL as NSURL, previewProvider: nil) { [weak self] _ in
+                guard let self else { return UIMenu(children: []) }
+                let open = UIAction(title: "Buka", image: UIImage(systemName: "arrow.up.forward.square")) { _ in
+                    self.session.select(self.tabID)
+                    self.session.navigateSelected(to: linkURL)
+                }
+                let newTab = UIAction(title: "Buka di Tab Baru", image: UIImage(systemName: "plus.square.on.square")) { _ in
+                    self.session.newTab(url: linkURL)
+                }
+                let privateTab = UIAction(title: "Buka di Tab Pribadi Baru", image: UIImage(systemName: "eye.slash")) { _ in
+                    self.session.newTab(url: linkURL, isIncognito: true)
+                }
+                let download = UIAction(title: "Unduh File Tertaut", image: UIImage(systemName: "arrow.down.circle")) { _ in
+                    self.session.onDownloadCaptured?(linkURL)
+                }
+                let copy = UIAction(title: "Salin Link", image: UIImage(systemName: "link")) { _ in
+                    UIPasteboard.general.url = linkURL
+                }
+                let share = UIAction(title: "Bagikan…", image: UIImage(systemName: "square.and.arrow.up")) { _ in
+                    Self.presentShareSheet(url: linkURL, sourceView: webView)
+                }
+                let bookmark = UIAction(title: "Tambah ke Bookmark", image: UIImage(systemName: "bookmark")) { _ in
+                    self.session.onBookmarkAdd?(linkURL.absoluteString, webView.title ?? "")
+                }
+                let reading = UIAction(title: "Tambah ke Daftar Bacaan", image: UIImage(systemName: "eyeglasses")) { _ in
+                    self.session.onReadingListAdd?(linkURL.absoluteString, webView.title ?? "")
+                }
+                return UIMenu(title: linkURL.absoluteString, children: [open, newTab, privateTab, download, copy, share, bookmark, reading])
+            }
+            completionHandler(configuration)
+        }
+
+        /// Shares a URL from UIKit land (the context menu has no SwiftUI
+        /// ShareLink): presents on the key window's root view controller.
+        private static func presentShareSheet(url: URL, sourceView: UIView) {
+            let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+            if let popover = sheet.popoverPresentationController {
+                popover.sourceView = sourceView
+                popover.sourceRect = CGRect(x: sourceView.bounds.midX, y: sourceView.bounds.midY, width: 1, height: 1)
+            }
+            let keyWindow = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first { $0.isKeyWindow }
+            keyWindow?.rootViewController?.present(sheet, animated: true)
+        }
+
         // DevTools bridge messages (console / fetch / XHR / inspect picks).
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == "mdmDevTools",
@@ -1790,6 +1852,8 @@ struct BrowserView: View {
     @State private var showingDevTools = false
     @State private var showingHistory = false
     @State private var showingBookmarks = false
+    @State private var showingBackHistory = false
+    @State private var showingForwardHistory = false
     @State private var showingClearData = false
     @State private var showingReader = false
     @State private var readerTitle = ""
@@ -1849,6 +1913,21 @@ struct BrowserView: View {
             session.onHistoryRecord = { [weak store] title, url in
                 store?.recordHistory(title: title, urlString: url)
             }
+            session.onBookmarkAdd = { [weak store] url, title in
+                guard let store else { return }
+                guard !store.browserSettings.bookmarks.contains(where: { $0.urlString == url }) else {
+                    capturedNotice = "Sudah ada di favorit."
+                    return
+                }
+                store.browserSettings.bookmarks.append(BrowserBookmark(title: title.isEmpty ? url : title, urlString: url))
+                store.saveBrowserSettings()
+                capturedNotice = "Ditambah ke favorit."
+            }
+            session.onReadingListAdd = { [weak store] url, title in
+                guard let store else { return }
+                let added = store.addReadingList(title: title.isEmpty ? url : title, urlString: url)
+                capturedNotice = added ? "Ditambahkan ke daftar bacaan." : "Sudah ada di daftar bacaan."
+            }
             session.applyRulesAndScripts(settings: store.browserSettings)
             session.applyMediaPlaybackSettings(store.browserSettings)
             if let tab = session.selectedTab { addressDraft = tab.host }
@@ -1903,6 +1982,12 @@ struct BrowserView: View {
         .sheet(isPresented: $showingHistory) {
             HistoryView(session: session)
         }
+        .sheet(isPresented: $showingBackHistory) {
+            BackForwardHistoryView(session: session, forward: false)
+        }
+        .sheet(isPresented: $showingForwardHistory) {
+            BackForwardHistoryView(session: session, forward: true)
+        }
         .sheet(isPresented: $showingBookmarks) {
             BookmarksView(session: session)
         }
@@ -1935,6 +2020,7 @@ struct BrowserView: View {
             }
             .disabled(session.selectedTab?.canGoBack != true)
             .opacity(session.selectedTab?.canGoBack == true ? 1 : 0.4)
+            .onLongPressGesture { showingBackHistory = true }
 
             addressPill
 
@@ -1976,6 +2062,8 @@ struct BrowserView: View {
                 }
                 Divider()
                 Button { session.goForward() } label: { Label("Maju", systemImage: "chevron.right") }
+                    .disabled(session.selectedTab?.canGoForward != true)
+                Button { showingForwardHistory = true } label: { Label("Riwayat maju…", systemImage: "list.bullet") }
                     .disabled(session.selectedTab?.canGoForward != true)
                 if let tab = session.selectedTab, let link = URL(string: tab.urlString), link.scheme != nil {
                     ShareLink(item: link) { Label("Bagikan…", systemImage: "square.and.arrow.up") }
@@ -2038,6 +2126,17 @@ struct BrowserView: View {
         .padding(.horizontal, 14).padding(.vertical, 11)
         .background(.ultraThinMaterial, in: Capsule())
         .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+        .contextMenu {
+            if let tab = session.selectedTab, let url = URL(string: tab.urlString), url.scheme != nil {
+                Button { UIPasteboard.general.url = url } label: {
+                    Label("Salin Link", systemImage: "link")
+                }
+                ShareLink(item: url) { Label("Bagikan…", systemImage: "square.and.arrow.up") }
+                Button { session.newTab(url: url) } label: {
+                    Label("Buka di Tab Baru", systemImage: "plus.square.on.square")
+                }
+            }
+        }
         .overlay(alignment: .bottomLeading) {
             GeometryReader { geo in
                 if let tab = session.selectedTab, tab.isLoading {
@@ -2425,6 +2524,46 @@ struct ReadingListItem: Identifiable, Codable, Equatable {
     var read: Bool = false
 }
 
+/// Back/forward history of the current tab (WKBackForwardList),
+/// shown from a long-press on the back button / the ⋯ menu.
+/// Tapping an entry jumps straight to it, like Safari's history menu.
+struct BackForwardHistoryView: View {
+    @ObservedObject var session: BrowserSession
+    var forward: Bool
+    @Environment(\.dismiss) var dismiss
+
+    private var items: [WKBackForwardListItem] {
+        forward ? session.forwardListItems() : session.backListItems().reversed()
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                    Button {
+                        session.go(to: item)
+                        dismiss()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.title?.isEmpty == false ? (item.title ?? "") : item.url.absoluteString)
+                                .lineLimit(1)
+                            Text(item.url.absoluteString)
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
+                }
+            }
+            .navigationTitle(forward ? "Riwayat maju" : "Riwayat mundur")
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Tutup") { dismiss() } } }
+            .overlay {
+                if items.isEmpty {
+                    Text("Tidak ada riwayat.").foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
 struct HistoryView: View {
     @EnvironmentObject var store: DownloadStore
     @ObservedObject var session: BrowserSession
@@ -2584,8 +2723,8 @@ struct BookmarksView: View {
             .sheet(item: $editing) { mark in EditBookmarkView(bookmark: mark) }
             .fileImporter(isPresented: $showingImporter, allowedContentTypes: [UTType.html], allowsMultipleSelection: false) { result in
                 guard let url = try? result.get().first else { return }
-                guard url.startAccessingSecurityScopedResource() else { return }
-                defer { url.stopAccessingSecurityScopedResource() }
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 guard let data = try? Data(contentsOf: url),
                       let html = String(data: data, encoding: .utf8) else {
                     importResult = "File tidak bisa dibaca."
@@ -3648,21 +3787,44 @@ struct AdBlockPanelView: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { store.saveBrowserSettings(); dismiss() } } }
             .sheet(isPresented: $showingNewExtension) { NewExtensionView() }
             .sheet(item: $editingExtension) { ext in EditExtensionView(ext: ext) }
-            .fileImporter(isPresented: $showingScriptImporter, allowedContentTypes: [UTType.javaScript, UTType.plainText], allowsMultipleSelection: false) { result in
+            .fileImporter(isPresented: $showingScriptImporter, allowedContentTypes: Self.scriptImportTypes, allowsMultipleSelection: false) { result in
                 importScript(from: result)
             }
         }
     }
 
+    /// Accepted types for .js import: JavaScript, plain text, source
+    /// code, plus whatever the system maps the .js extension to, so a
+    /// script file is never greyed out in the picker.
+    private static var scriptImportTypes: [UTType] {
+        var types: [UTType] = [.javaScript, .plainText, .sourceCode]
+        if let js = UTType(tag: "js", tagClass: .filenameExtension, conformingTo: .sourceCode) {
+            types.append(js)
+        }
+        return types
+    }
+
+    /// Decodes script bytes, tolerating UTF-16/Latin-1 files and a BOM,
+    /// which some editors (notably on Windows) produce.
+    private static func decodeScript(_ data: Data) -> String? {
+        for encoding in [String.Encoding.utf8, .utf16, .isoLatin1] {
+            if var text = String(data: data, encoding: encoding) {
+                if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
+                return text
+            }
+        }
+        return nil
+    }
+
     private func importScript(from result: Result<[URL], Error>) {
         guard let url = try? result.get().first else { return }
-        guard url.startAccessingSecurityScopedResource() else {
-            scriptImportResult = "File tidak bisa dibuka."
-            return
-        }
-        defer { url.stopAccessingSecurityScopedResource() }
+        // startAccessingSecurityScopedResource returns false for URLs
+        // that need no security scope (plain on-device files). The old
+        // code treated that as "cannot open" and rejected the import.
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url),
-              let source = String(data: data, encoding: .utf8),
+              let source = Self.decodeScript(data),
               !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             scriptImportResult = "File kosong atau bukan teks."
             return
@@ -3687,10 +3849,14 @@ struct AdBlockPanelView: View {
             if t == "// ==/UserScript==" { break }
             guard t.hasPrefix("//") else { continue }
             let body = t.dropFirst(2).trimmingCharacters(in: .whitespaces)
-            if body.hasPrefix("@name") {
-                name = body.dropFirst(5).trimmingCharacters(in: .whitespaces)
-            } else if body.hasPrefix("@run-at") {
-                atStart = body.dropFirst(7).trimmingCharacters(in: .whitespaces).lowercased().contains("document-start")
+            // Split "@key value" on the first whitespace, so "@namespace"
+            // is never mistaken for "@name" (the old prefix check did).
+            let parts = body.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
+            guard parts.count == 2 else { continue }
+            switch parts[0] {
+            case "@name": name = String(parts[1])
+            case "@run-at": atStart = parts[1].lowercased().contains("document-start")
+            default: break
             }
         }
         return (name, atStart)
