@@ -268,6 +268,10 @@ struct BrowserSettings: Codable {
         "Custom": "deepseek-v4.1-flash",
     ]
     var aiCustomEndpoint: String = "https://balitechsolution.com/v3"
+    // Provider for the dedicated AI chat tab. Separate from aiProvider
+    // (the Ask AI sheet): the chat tab defaults to the OpenAI-compatible
+    // Custom endpoint.
+    var aiChatProvider: String = "Custom"
 }
 
 // MARK: - User-agent templates ("tinggal pilih")

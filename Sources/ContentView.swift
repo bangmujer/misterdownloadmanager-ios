@@ -2,9 +2,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Bottom tab bar (like the reference browser app): Downloads,
-/// Browser, My Files, Settings.
+/// Browser, AI chat, My Files, Settings.
 enum AppTab: Hashable {
-    case downloads, browser, files, settings
+    case downloads, browser, ai, files, settings
 }
 
 struct ContentView: View {
@@ -41,6 +41,10 @@ struct ContentView: View {
             BrowserView(onExitToDownloads: { selectedTab = .downloads })
                 .tabItem { Label("Browser", systemImage: "globe") }
                 .tag(AppTab.browser)
+
+            AIChatView()
+                .tabItem { Label("AI", systemImage: "sparkles") }
+                .tag(AppTab.ai)
 
             DownloadedFilesView()
                 .tabItem { Label("My Files", systemImage: "folder") }

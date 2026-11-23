@@ -238,6 +238,74 @@ enum AIClient {
         stream(request: request, provider: provider, onToken: onToken, onDone: onDone)
     }
 
+    /// Multi-turn chat for the dedicated AI tab: the whole recent
+    /// history (roles "user"/"assistant", oldest first) is sent, so the
+    /// model keeps context across turns. Same streaming path as `ask`.
+    static func askChat(provider: AIProvider, model: String, apiKey: String, endpoint: String = "",
+                        messages: [(role: String, text: String)],
+                        onToken: @escaping (String) -> Void,
+                        onDone: @escaping (String?) -> Void) {
+        guard let request = makeChatRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, messages: messages) else {
+            onDone("Tidak bisa membuat permintaan untuk \(provider.displayName).")
+            return
+        }
+        stream(request: request, provider: provider, onToken: onToken, onDone: onDone)
+    }
+
+    private static func makeChatRequest(provider: AIProvider, model: String, apiKey: String, endpoint: String, messages: [(role: String, text: String)]) -> URLRequest? {
+        let system = "Kamu adalah asisten AI di dalam aplikasi Mister Download Manager. Jawablah dalam bahasa yang sama dengan pesan pengguna, ringkas tapi lengkap."
+        let recent = Array(messages.suffix(20))
+        switch provider {
+        case .gemini:
+            guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):streamGenerateContent?alt=sse&key=\(apiKey)") else { return nil }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let contents: [[String: Any]] = recent.map { ["role": $0.role == "assistant" ? "model" : "user", "parts": [["text": $0.text]]] }
+            req.httpBody = try? JSONSerialization.data(withJSONObject: [
+                "systemInstruction": ["parts": [["text": system]]],
+                "contents": contents,
+            ])
+            return req
+        case .chatgpt, .custom:
+            // Same OpenAI chat/completions shape as makeRequest; Custom
+            // just points it at the user's own base URL.
+            let urlString: String
+            if provider == .custom {
+                guard let url = chatCompletionsURL(baseURL: endpoint) else { return nil }
+                urlString = url.absoluteString
+            } else {
+                urlString = "https://api.openai.com/v1/chat/completions"
+            }
+            guard let url = URL(string: urlString) else { return nil }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            var apiMessages: [[String: Any]] = [["role": "system", "content": system]]
+            apiMessages += recent.map { ["role": $0.role, "content": $0.text] }
+            req.httpBody = try? JSONSerialization.data(withJSONObject: [
+                "model": model, "stream": true, "messages": apiMessages,
+            ])
+            return req
+        case .claude:
+            guard let url = URL(string: "https://api.anthropic.com/v1/messages") else { return nil }
+            var req = URLRequest(url: url)
+            req.httpMethod = "POST"
+            req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+            req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: [
+                "model": model, "max_tokens": 2048, "stream": true,
+                "system": system,
+                "messages": recent.map { ["role": $0.role, "content": $0.text] },
+            ])
+            return req
+        case .meta:
+            return nil
+        }
+    }
+
     private static func buildPrompt(question: String, pageTitle: String, pageURL: String, pageText: String, attachment: AIAttachment?) -> String {
         var parts: [String] = []
         parts.append("Kamu adalah asisten AI di dalam browser. Jawablah dalam bahasa yang sama dengan pertanyaan pengguna.")
