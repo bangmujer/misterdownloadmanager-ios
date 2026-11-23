@@ -5580,9 +5580,19 @@ struct EditExtensionView: View {
             .navigationTitle("Ubah extension")
             .alert("Hapus ekstensi ini?", isPresented: $showingDeleteConfirm) {
                 Button("Hapus", role: .destructive) {
-                    store.browserSettings.extensions.removeAll { $0.id == extensionID }
-                    store.saveBrowserSettings()
+                    // Dismiss first, mutate a tick later: removing the
+                    // extension synchronously from inside this alert
+                    // crashes the app — the deleted item backs the
+                    // presented sheet's `item:` binding, so the list
+                    // changes identity while the sheet/alert is still
+                    // tearing down. Deferring lets the dismissal finish
+                    // first; the deletion itself already worked.
+                    let id = extensionID
                     dismiss()
+                    DispatchQueue.main.async {
+                        store.browserSettings.extensions.removeAll { $0.id == id }
+                        store.saveBrowserSettings()
+                    }
                 }
                 Button("Batal", role: .cancel) {}
             } message: {
