@@ -4871,7 +4871,7 @@ struct CookiesView: View {
     }
 
     private func delete(at offsets: IndexSet) {
-        for index in offsets { dataStore.httpCookieStore.deleteCookie(cookies[index]) { } }
+        for index in offsets { dataStore.httpCookieStore.delete(cookies[index]) { } }
         cookies.remove(atOffsets: offsets)
     }
 }
