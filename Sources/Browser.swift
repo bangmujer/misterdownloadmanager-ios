@@ -1225,6 +1225,8 @@ final class BrowserSession: ObservableObject {
   var ORIG_TRANSFORM = 'data-mdm-orig-transform';
   var LIFT_PX = 'data-mdm-lift-px';
   var DEAD_PX = 'data-mdm-dead-px';
+  var ORIG_BG = 'data-mdm-orig-bg';
+  var ORIG_SHADOW = 'data-mdm-orig-shadow';
   var lifted = [];
   var scheduled = false;
   var lastApply = 0;
@@ -1347,6 +1349,49 @@ final class BrowserSession: ObservableObject {
     }
     return found;
   }
+  function bgAlpha(cs) {
+    var c = cs.backgroundColor || '';
+    if (c === 'transparent') return 0;
+    var i = c.indexOf('(');
+    var j = c.indexOf(')');
+    if (i < 0 || j < 0) return 0;
+    var parts = c.substring(i + 1, j).split(',');
+    if (parts.length > 3) return parseFloat(parts[3]) || 0;
+    return 1;
+  }
+  // The white band behind a lifted bar is the bar's own opaque
+  // background (or a full-width inner layer's). Clear it so the page
+  // shows through behind the icons, like the floating glass pill.
+  // Small descendants (badges, icon buttons) keep their backgrounds:
+  // only layers spanning the bar are cleared. Originals are saved per
+  // element so restore() puts them back.
+  function clearBarBackground(el, z) {
+    if (el.hasAttribute(ORIG_BG)) return;
+    var barRect = cssRect(el, z);
+    var targets = [el];
+    var all = el.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) {
+      var c = all[i];
+      var cs = window.getComputedStyle(c);
+      if (bgAlpha(cs) <= 0) continue;
+      var r = cssRect(c, z);
+      if (r.width >= barRect.width * 0.85 && r.height >= barRect.height * 0.5) targets.push(c);
+    }
+    for (var j = 0; j < targets.length; j++) {
+      var t = targets[j];
+      t.setAttribute(ORIG_BG, t.style.background || '');
+      t.setAttribute(ORIG_SHADOW, t.style.boxShadow || '');
+      t.style.background = 'transparent';
+      t.style.boxShadow = 'none';
+    }
+    log('transparent bg ' + describe(el));
+  }
+  function restoreBgOne(t) {
+    t.style.background = t.getAttribute(ORIG_BG) || '';
+    t.style.boxShadow = t.getAttribute(ORIG_SHADOW) || '';
+    t.removeAttribute(ORIG_BG);
+    t.removeAttribute(ORIG_SHADOW);
+  }
   function restore(el) {
     el.style.bottom = el.getAttribute(ORIG_BOTTOM) || '';
     el.style.transform = el.getAttribute(ORIG_TRANSFORM) || '';
@@ -1354,6 +1399,9 @@ final class BrowserSession: ObservableObject {
     el.removeAttribute(DEAD_PX);
     el.removeAttribute(ORIG_BOTTOM);
     el.removeAttribute(ORIG_TRANSFORM);
+    var cleared = el.querySelectorAll('[' + ORIG_BG + ']');
+    for (var i = 0; i < cleared.length; i++) restoreBgOne(cleared[i]);
+    if (el.hasAttribute(ORIG_BG)) restoreBgOne(el);
   }
   // Bottom of the bar's visible content: a bar container often carries
   // empty space below its icons (e.g. an empty mini-player slot), and
@@ -1374,6 +1422,7 @@ final class BrowserSession: ObservableObject {
     return maxBottom;
   }
   function lift(el, px, z) {
+    clearBarBackground(el, z);
     if (!el.hasAttribute(ORIG_BOTTOM)) el.setAttribute(ORIG_BOTTOM, el.style.bottom || '');
     if (!el.hasAttribute(ORIG_TRANSFORM)) el.setAttribute(ORIG_TRANSFORM, el.style.transform || '');
     var dead = 0;
