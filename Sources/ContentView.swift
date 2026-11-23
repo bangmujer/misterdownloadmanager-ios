@@ -50,6 +50,9 @@ struct ContentView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppTab.settings)
         }
+        // No background fill on the tab bar: the page must show through
+        // to the bottom edge instead of a white band blocking it.
+        .toolbarBackground(.hidden, for: .tabBar)
         .overlay(alignment: .top) { clipboardBanner }
         .alert("Userscript diimpor", isPresented: Binding(get: { store.lastImportMessage != nil }, set: { if !$0 { store.lastImportMessage = nil } })) {
             Button("OK", role: .cancel) { store.lastImportMessage = nil }
