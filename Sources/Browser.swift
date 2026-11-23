@@ -82,6 +82,9 @@ struct BrowserSettings: Codable {
     var linkPreview: Bool = true
     var detectAddresses: Bool = true
     var webInspector: Bool = true
+    // DevTools entry point: when on, the floating DevTools button and
+    // the ⋯-menu entry appear in the browser; off hides both.
+    var showDevToolsButton: Bool = true
     // Timer bypass: speed up countdown waits on download pages.
     var skipTimers: Bool = false
     // Freeze timers: on these hosts, page timers (setTimeout/setInterval)
@@ -1842,6 +1845,9 @@ struct BrowserView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
     @Environment(\.scenePhase) var scenePhase
+    /// When the browser lives in the bottom tab bar, "Kembali ke
+    /// Download" switches to the Downloads tab instead of dismissing.
+    var onExitToDownloads: (() -> Void)? = nil
     @StateObject private var session = BrowserSession()
     @State private var addressDraft = ""
     @State private var isEditingAddress = false
@@ -1884,6 +1890,21 @@ struct BrowserView: View {
             .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 76) }
             VStack(spacing: 8) {
                 if showingFind { findBar }
+                // Floating DevTools button (DevSnoop-style): only when
+                // the setting is on and a real page is open.
+                if store.browserSettings.showDevToolsButton, session.selectedTab?.showsStartPage != true {
+                    HStack {
+                        Spacer()
+                        Button { showingDevTools = true } label: {
+                            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                                .font(.body.weight(.semibold))
+                                .frame(width: 44, height: 44)
+                                .background(.ultraThinMaterial, in: Circle())
+                                .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+                        }
+                        .padding(.trailing, 4)
+                    }
+                }
                 floatingNavBar
             }
         }
@@ -1978,6 +1999,8 @@ struct BrowserView: View {
         }
         .sheet(isPresented: $showingDevTools) {
             DevToolsView(session: session)
+                .presentationDetents([.fraction(0.65), .large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showingHistory) {
             HistoryView(session: session)
@@ -2039,8 +2062,13 @@ struct BrowserView: View {
             }
 
             Menu {
-                Button { dismiss() } label: { Label("Kembali ke Download", systemImage: "xmark.circle") }
-                Button { showingDevTools = true } label: { Label("DevTools (F12)", systemImage: "chevron.left.forwardslash.chevron.right") }
+                Button {
+                    if let exit = onExitToDownloads { exit() } else { dismiss() }
+                } label: { Label("Kembali ke Download", systemImage: "xmark.circle") }
+                Button { session.resetTab(session.selectedID) } label: { Label("Beranda", systemImage: "house") }
+                if store.browserSettings.showDevToolsButton {
+                    Button { showingDevTools = true } label: { Label("DevTools (F12)", systemImage: "chevron.left.forwardslash.chevron.right") }
+                }
                 Button { showingHistory = true } label: { Label("Riwayat", systemImage: "clock") }
                 Button { showingBookmarks = true } label: { Label("Bookmark", systemImage: "bookmark") }
                 Button { openReaderMode() } label: { Label("Mode Baca", systemImage: "book") }

@@ -1,22 +1,24 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Bottom tab bar (like the reference browser app): Downloads,
+/// Browser, My Files, Settings.
+enum AppTab: Hashable {
+    case downloads, browser, files, settings
+}
+
 struct ContentView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.mdmScale) var scale
+    @State private var selectedTab: AppTab = .downloads
     @State private var showingAdd = false
     @State private var showingGrabber = false
     @State private var showingTorrent = false
-    @State private var showingSettings = false
-    @State private var showingFiles = false
-    @State private var showingBrowser = false
     @State private var addURLPreset = ""
     @State private var confirmDelete: DownloadItem?
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-        } detail: {
+        TabView(selection: $selectedTab) {
             NavigationStack {
                 downloadList
                     .navigationTitle(titleForCategory)
@@ -27,62 +29,32 @@ struct ContentView: View {
                     .sheet(isPresented: $showingAdd) { AddURLView(presetURL: addURLPreset) }
                     .sheet(isPresented: $showingGrabber) { VideoGrabberView() }
                     .sheet(isPresented: $showingTorrent) { TorrentAddView() }
-                    .sheet(isPresented: $showingSettings) { SettingsView() }
-                    .sheet(isPresented: $showingFiles) { DownloadedFilesView() }
-                    .fullScreenCover(isPresented: $showingBrowser) { BrowserView() }
                     .alert("Hapus download?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
                         Button("Hapus + file", role: .destructive) { if let it = confirmDelete { store.remove(id: it.id, deleteFile: true) } }
                         Button("Hapus dari daftar", role: .destructive) { if let it = confirmDelete { store.remove(id: it.id) } }
                         Button("Batal", role: .cancel) {}
                     }
             }
+            .tabItem { Label("Downloads", systemImage: "arrow.down.circle") }
+            .tag(AppTab.downloads)
+
+            BrowserView(onExitToDownloads: { selectedTab = .downloads })
+                .tabItem { Label("Browser", systemImage: "globe") }
+                .tag(AppTab.browser)
+
+            DownloadedFilesView()
+                .tabItem { Label("My Files", systemImage: "folder") }
+                .tag(AppTab.files)
+
+            SettingsView(showsDoneButton: false)
+                .tabItem { Label("Settings", systemImage: "gearshape") }
+                .tag(AppTab.settings)
         }
         .overlay(alignment: .top) { clipboardBanner }
     }
 
     private var titleForCategory: String {
         store.selectedCategory == .all ? "Mister Download Manager" : store.selectedCategory.rawValue
-    }
-
-    private var sidebar: some View {
-        List(selection: Binding<DownloadCategory?>(get: { store.selectedCategory }, set: { if let value = $0 { store.selectedCategory = value } })) {
-            HStack(spacing: 10) {
-                Image("Logo").resizable().aspectRatio(contentMode: .fill)
-                    .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 10))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Mister Download Manager").font(.headline).lineLimit(1)
-                    Text("iOS port · GPL-3.0").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            .listRowBackground(Color.clear)
-            Section("Categories") {
-                ForEach(DownloadCategory.allCases) { cat in
-                    Label {
-                        HStack { Text(cat.rawValue); Spacer(); Text("\(store.count(for: cat))").foregroundStyle(.secondary).font(.caption) }
-                    } icon: { Image(systemName: cat.systemImage) }
-                    .tag(cat)
-                }
-            }
-            Section("Tools") {
-                Button { showingBrowser = true } label: { Label("Browser", systemImage: "globe") }
-                Button { showingGrabber = true } label: { Label("Video / Gallery Grabber", systemImage: "play.rectangle.on.rectangle") }
-                Button { showingTorrent = true } label: { Label("Add Torrent", systemImage: "magnet") }
-                Button { showingFiles = true } label: { Label("Downloaded Files", systemImage: "folder") }
-                Button { showingAdd = true } label: { Label("Add URL", systemImage: "link.badge.plus") }
-            }
-            Section("App") {
-                Button { showingSettings = true } label: { Label("Options / Settings", systemImage: "gearshape") }
-                LabeledContent("Scheduler", value: store.settings.schedulerEnabled ? (store.schedulerAllowsNow() ? "Active window" : "Outside window") : "Off")
-                if let addr = store.remoteAddress {
-                    LabeledContent("Remote", value: addr)
-                }
-            }
-            Section("About") {
-                Text("iOS port of Mister Download Manager (GPL-3.0). Desktop-only features are listed in Settings → About — not hidden.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .navigationTitle("MDM")
     }
 
     @ToolbarContentBuilder
@@ -104,7 +76,18 @@ struct ContentView: View {
             Button { store.pauseAll() } label: { Image(systemName: "pause.fill") }
         }
         ToolbarItem(placement: .topBarLeading) {
-            Button { showingSettings = true } label: { Image(systemName: "gearshape") }
+            Menu {
+                Picker("Kategori", selection: Binding(get: { store.selectedCategory }, set: { store.selectedCategory = $0 })) {
+                    ForEach(DownloadCategory.allCases) { cat in
+                        Label("\(cat.rawValue) (\(store.count(for: cat)))", systemImage: cat.systemImage).tag(cat)
+                    }
+                }
+            } label: {
+                Label(store.selectedCategory.rawValue, systemImage: "line.3.horizontal.decrease.circle")
+            }
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            Button { selectedTab = .settings } label: { Image(systemName: "gearshape") }
         }
     }
 

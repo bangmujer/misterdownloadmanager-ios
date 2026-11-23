@@ -398,6 +398,7 @@ struct DevToolsView: View {
     @State private var tab = 0
     @State private var jsInput = ""
     @State private var consoleFilter = 0
+    @State private var netFilter = ""
     @State private var selectedEntry: DevNetworkEntry?
     @State private var domText = ""
     @State private var domFilter = ""
@@ -431,27 +432,67 @@ struct DevToolsView: View {
         }
     }
 
+    private var filteredNetLogs: [DevNetworkEntry] {
+        let q = netFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return netLogs }
+        return netLogs.filter { $0.url.lowercased().contains(q) || $0.method.lowercased().contains(q) }
+    }
+
     var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                Picker("Panel", selection: $tab) {
-                    Text("Console").tag(0)
-                    Text("Elements").tag(1)
-                    Text("Network").tag(2)
-                    Text("Storage").tag(3)
+        VStack(spacing: 0) {
+            // DevSnoop-style header: title + page host + close button.
+            HStack(spacing: 10) {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.blue)
+                    .frame(width: 34, height: 34)
+                    .background(Color.blue.opacity(0.15), in: Circle())
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("DevTools").font(.headline)
+                    Text(session.selectedTab?.host ?? "—").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                .pickerStyle(.segmented)
-                .padding(12)
-                if tab == 0 { consoleTab }
-                else if tab == 1 { elementsTab }
-                else if tab == 2 { networkTab }
-                else { storageTab }
+                Spacer()
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 34, height: 34)
+                        .background(Color(.secondarySystemBackground), in: Circle())
+                }
             }
-            .navigationTitle("DevTools")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Selesai") { dismiss() } } }
+            .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 6)
+            // Tab bar with icons + underline, like the reference panel.
+            HStack(spacing: 0) {
+                devTabButton(index: 0, title: "Console", icon: "terminal")
+                devTabButton(index: 1, title: "Elements", icon: "square.stack.3d.up")
+                devTabButton(index: 2, title: "Network", icon: "antenna.radiowaves.left.and.right")
+                devTabButton(index: 3, title: "Storage", icon: "internaldrive")
+            }
+            .padding(.horizontal, 8)
+            Divider()
+            if tab == 0 { consoleTab }
+            else if tab == 1 { elementsTab }
+            else if tab == 2 { networkTab }
+            else { storageTab }
         }
+        .preferredColorScheme(.dark)
         .onDisappear { session.setInspectMode(false) }
+    }
+
+    private func devTabButton(index: Int, title: String, icon: String) -> some View {
+        let selected = tab == index
+        return Button { tab = index } label: {
+            VStack(spacing: 5) {
+                Label(title, systemImage: icon)
+                    .font(.subheadline.weight(selected ? .semibold : .regular))
+                    .foregroundStyle(selected ? .blue : .secondary)
+                    .padding(.vertical, 6)
+                Rectangle()
+                    .fill(selected ? Color.blue : Color.clear)
+                    .frame(height: 2)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .buttonStyle(.plain)
     }
 
     // MARK: Console
@@ -673,18 +714,38 @@ struct DevToolsView: View {
     private var networkTab: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Button("Muat resource timing") { loadResources() }
-                Button("Hapus log") { if let id = tabID { session.networkLogs[id] = [] } }
-                Spacer()
-                Text("\(netLogs.count) entri").font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.caption)
+                    TextField("Filter URL atau method", text: $netFilter)
+                        .autocapitalization(.none).autocorrectionDisabled()
+                        .font(.subheadline)
+                    if !netFilter.isEmpty {
+                        Button { netFilter = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                    }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
+                Button { if let id = tabID { session.networkLogs[id] = [] } } label: {
+                    Image(systemName: "trash").frame(width: 36, height: 36)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 9))
+                }
             }
             .padding(12)
+            HStack(spacing: 8) {
+                Button("Muat resource timing") { loadResources() }
+                Spacer()
+                Text("\(filteredNetLogs.count) dari \(netLogs.count) entri").font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12).padding(.bottom, 6)
             List {
                 Section("Navigasi, fetch & XHR") {
-                    if netLogs.isEmpty {
-                        Text("Belum ada entri. Navigasi dan panggilan fetch/XHR halaman ini tercatat di sini.").foregroundStyle(.secondary)
+                    if filteredNetLogs.isEmpty {
+                        Text(netLogs.isEmpty
+                            ? "Belum ada entri. Navigasi dan panggilan fetch/XHR halaman ini tercatat di sini."
+                            : "Tidak ada entri yang cocok dengan filter.")
+                            .foregroundStyle(.secondary)
                     }
-                    ForEach(netLogs) { e in
+                    ForEach(filteredNetLogs) { e in
                         Button { selectedEntry = e } label: {
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack(spacing: 6) {

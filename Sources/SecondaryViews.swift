@@ -6,6 +6,9 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
+    /// In the bottom tab bar there is nothing to dismiss, so the Done
+    /// button is hidden; as a sheet it stays.
+    var showsDoneButton: Bool = true
     @State private var cacheBytes: Int64 = 0
     @State private var cacheMessage: String?
     var body: some View {
@@ -100,6 +103,8 @@ struct SettingsView: View {
                     Toggle("Tampilkan pratinjau link (tekan lama)", isOn: $store.browserSettings.linkPreview)
                     Toggle("Deteksi alamat (buka di Google Maps)", isOn: $store.browserSettings.detectAddresses)
                     Toggle("Web Inspector (periksa dari Safari di Mac)", isOn: $store.browserSettings.webInspector)
+                    Toggle("Tampilkan tombol DevTools di browser", isOn: $store.browserSettings.showDevToolsButton)
+                    Text("Kalau aktif, tombol DevTools melayang di atas halaman dan entri DevTools muncul di menu ⋯. Panelnya tampil sebagai sheet bawah gaya DevSnoop (Console, Network, Elements, Storage).").font(.caption).foregroundStyle(.secondary)
                     Toggle("Lewati timer tunggu (countdown download)", isOn: $store.browserSettings.skipTimers)
                     Toggle("Tanpa redirect (klik download langsung ke link final)", isOn: $store.browserSettings.noRedirects)
                     Text("Blokir popup menahan jendela yang dibuka script (window.open); tautan yang diketuk tetap dibuka. Lewati timer mempercepat hitung mundur di halaman download sampai 50x dan mengaktifkan tombol download yang dikunci timer; timer yang ditegakkan server dan verifikasi manusia (mis. Cloudflare) tidak bisa dilewati. Tanpa redirect membuat klik tombol download langsung membuka link finalnya dan membuang popup ke situs lain; popup login/pembayaran yang sah bisa ikut tertahan, matikan kalau perlu.").font(.caption).foregroundStyle(.secondary)
@@ -113,7 +118,11 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Options")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { store.save(); dismiss() } } }
+            .toolbar {
+                if showsDoneButton {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { store.save(); dismiss() } }
+                }
+            }
             .onAppear { cacheBytes = store.downloadCacheSize() }
             .onReceive(store.$settings.dropFirst()) { _ in store.save() }
             .onReceive(store.$browserSettings.dropFirst()) { _ in store.saveBrowserSettings() }
