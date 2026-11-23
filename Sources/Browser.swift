@@ -1227,6 +1227,19 @@ final class BrowserSession: ObservableObject {
         if (Math.abs(r.bottom - vh) > 3) return false;
         return true;
       }
+      function barFromHit(el) {
+        var node = el;
+        while (node && node !== document.documentElement) {
+          if (node instanceof HTMLElement) {
+            var cs = window.getComputedStyle(node);
+            if (cs.position === 'fixed' || cs.position === 'sticky') {
+              return isBottomBar(node) ? node : null;
+            }
+          }
+          node = node.parentElement;
+        }
+        return null;
+      }
       function restore(el) {
         el.style.bottom = el.getAttribute(ORIG_BOTTOM) || '';
         el.style.transform = el.getAttribute(ORIG_TRANSFORM) || '';
@@ -1252,8 +1265,6 @@ final class BrowserSession: ObservableObject {
       }
       function apply() {
         var px = window.__mdmChromeBottom || 0;
-        var root = document.body || document.documentElement;
-        if (!root) return;
         var kept = [];
         for (var i = 0; i < lifted.length; i++) {
           var prev = lifted[i];
@@ -1261,13 +1272,14 @@ final class BrowserSession: ObservableObject {
           else restore(prev);
         }
         lifted = kept;
-        var all = root.querySelectorAll('*');
-        for (var j = 0; j < all.length; j++) {
-          var el = all[j];
-          if (!isBottomBar(el)) continue;
-          if (el.closest('[' + LIFT_PX + ']')) continue;
-          if (lifted.indexOf(el) === -1) lifted.push(el);
-          lift(el, px);
+        var w = window.innerWidth;
+        var vh = window.innerHeight;
+        var xs = [w * 0.1, w * 0.5, w * 0.9];
+        for (var k = 0; k < xs.length; k++) {
+          var hit = document.elementFromPoint(xs[k], vh - 2);
+          if (!hit) continue;
+          var bar = barFromHit(hit);
+          if (bar && lifted.indexOf(bar) === -1) { lifted.push(bar); lift(bar, px); }
         }
       }
       function schedule() {
@@ -1288,6 +1300,7 @@ final class BrowserSession: ObservableObject {
         }
         window.addEventListener('resize', schedule);
         window.addEventListener('orientationchange', schedule);
+        window.addEventListener('scroll', schedule);
       }
       if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
       else watch();
