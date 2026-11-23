@@ -26,16 +26,51 @@ targets:
     dependencies:
       - package: ZIPFoundation
         product: ZIPFoundation
-    # Real Info.plist (document types + mdm:// scheme). XcodeGen sets
-    # INFOPLIST_FILE from this path; GENERATE_INFOPLIST_FILE must stay
-    # off, and the INFOPLIST_KEY_ settings below still apply on top.
+    # LESSON (2026-11-23): XcodeGen GENERATES AND OVERWRITES the file
+    # at info.path on every `xcodegen generate` run — a hand-written
+    # Info.plist committed to the repo NEVER survives to the device.
+    # Custom keys MUST live in info.properties below. A hand-written
+    # Info.plist (cb0e54a2–f2b69740) silently lost UILaunchScreen,
+    # CFBundleDocumentTypes and CFBundleURLTypes on every CI build,
+    # which letterboxed the app and killed share-sheet import.
     info:
       path: Info.plist
+      properties:
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        CFBundleIconName: AppIcon
+        CFBundleDisplayName: "Mister Download Manager"
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        UIBackgroundModes:
+          - audio
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: "JavaScript source"
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.javascript
+              - public.plain-text
+        CFBundleURLTypes:
+          - CFBundleURLName: com.bangmujer.misterdownloadmanager
+            CFBundleURLSchemes:
+              - mdm
     settings:
       base:
         PRODUCT_NAME: "Mister Download Manager"
         PRODUCT_BUNDLE_IDENTIFIER: com.bangmujer.misterdownloadmanager
-        MARKETING_VERSION: "0.6.7"
+        MARKETING_VERSION: "0.6.8"
         # libsqlite3 is needed for `import SQLite3` (WQFiles-style SQLite viewer).
         OTHER_LDFLAGS: "$(inherited) -lsqlite3"
         CURRENT_PROJECT_VERSION: "1"
@@ -43,15 +78,6 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         IPHONEOS_DEPLOYMENT_TARGET: "16.0"
         INFOPLIST_KEY_CFBundleDisplayName: "Mister Download Manager"
-        INFOPLIST_KEY_UIFileSharingEnabled: YES
-        INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
-        INFOPLIST_KEY_NSAllowsArbitraryLoads: YES
-        # "audio" is required for background media playback + Picture in
-        # Picture. The value must use Xcode's own parenthesised-list form
-        # (as Xcode itself writes it: "(audio)"); a plain string does NOT
-        # become the UIBackgroundModes array, which silently disabled
-        # background audio and PiP entirely.
-        INFOPLIST_KEY_UIBackgroundModes: "(audio)"
         CODE_SIGN_IDENTITY: ""
         CODE_SIGNING_REQUIRED: NO
         CODE_SIGNING_ALLOWED: NO
