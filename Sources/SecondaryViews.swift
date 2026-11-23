@@ -334,6 +334,8 @@ struct WQDirView: View {
     let root: URL
     @ObservedObject var browser: WQBrowserState
     @EnvironmentObject var store: DownloadStore
+    @Environment(\.editMode) private var editMode
+    private var isEditing: Bool { editMode?.wrappedValue == .active }
 
     private var items: [URL] {
         _ = browser.refreshTick
@@ -344,7 +346,7 @@ struct WQDirView: View {
     private var isRoot: Bool { dir == root }
 
     var body: some View {
-        List(selection: $browser.selection) {
+        List {
             if isRoot {
                 let favorites = WQFavorites.all()
                 if !favorites.isEmpty {
@@ -369,6 +371,10 @@ struct WQDirView: View {
         }
         .navigationTitle(isRoot ? "My Files" : dir.lastPathComponent)
         .searchable(text: $browser.searchText, prompt: "Cari di folder ini")
+        .onChange(of: isEditing) { editing in
+            // A stale selection must never block taps: leaving Edit mode clears it.
+            if !editing { browser.selection.removeAll() }
+        }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { EditButton() }
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -421,11 +427,29 @@ struct WQDirView: View {
         let isDir = wqIsDirectory(url)
         return Group {
             if isDir {
-                NavigationLink(value: url) {
+                // Folders navigate on tap, always — via the path, not a
+                // NavigationLink, so List selection can never swallow the tap.
+                // In Edit mode the same tap toggles selection instead.
+                Button {
+                    if isEditing {
+                        if browser.selection.contains(url) { browser.selection.remove(url) }
+                        else { browser.selection.insert(url) }
+                    } else {
+                        browser.path.append(url)
+                    }
+                } label: {
                     rowLabel(url, isDir: true)
                 }
+                .buttonStyle(.plain)
             } else {
-                Button { openDefault(url) } label: { rowLabel(url, isDir: false) }
+                Button {
+                    if isEditing {
+                        if browser.selection.contains(url) { browser.selection.remove(url) }
+                        else { browser.selection.insert(url) }
+                    } else {
+                        openDefault(url)
+                    }
+                } label: { rowLabel(url, isDir: false) }
             }
         }
         .contextMenu {
@@ -459,12 +483,19 @@ struct WQDirView: View {
 
     private func rowLabel(_ url: URL, isDir: Bool) -> some View {
         HStack {
+            if isEditing {
+                Image(systemName: browser.selection.contains(url) ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(browser.selection.contains(url) ? .tint : .secondary)
+            }
             Image(systemName: isDir ? "folder.fill" : iconFor(url)).foregroundStyle(.tint)
             VStack(alignment: .leading) {
                 Text(url.lastPathComponent).lineLimit(1)
                 Text(isDir ? "Folder" : fileSize(url)).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            if isDir {
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+            }
             if !isDir {
                 Button { browser.previewURL = url } label: { Image(systemName: "eye") }.buttonStyle(.plain)
                 ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }.buttonStyle(.plain)
