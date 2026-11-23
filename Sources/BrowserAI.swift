@@ -6,7 +6,11 @@ import UIKit
 // MARK: - Ask AI providers
 //
 // Gemini, ChatGPT and Claude are reached through each provider's own
-// public API with the user's own key. Meta does not publish a public API
+// public API with the user's own key. "Custom" is any OpenAI-compatible
+// chat/completions endpoint (the user's own proxy/gateway): same request
+// shape as ChatGPT — POST, Bearer key, {"model","stream","messages"} —
+// against a user-supplied base URL, with a user-supplied model name.
+// Meta does not publish a public API
 // for the Meta AI assistant, so "Muse" is an honest web hand-off: it
 // opens meta.ai in a new tab and copies the question + page context for
 // pasting. It is labelled that way in the UI and never fakes an answer.
@@ -15,6 +19,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
     case gemini = "Gemini"
     case chatgpt = "ChatGPT"
     case claude = "Claude"
+    case custom = "Custom"
     case meta = "Muse"
 
     var id: String { rawValue }
@@ -27,6 +32,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
         case .gemini: return "gemini-2.0-flash"
         case .chatgpt: return "gpt-4o-mini"
         case .claude: return "claude-3-5-haiku-20241022"
+        case .custom: return "deepseek-v4.1-flash"
         case .meta: return ""
         }
     }
@@ -36,6 +42,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
         case .gemini: return "https://aistudio.google.com/apikey"
         case .chatgpt: return "https://platform.openai.com/api-keys"
         case .claude: return "https://console.anthropic.com/settings/keys"
+        case .custom: return nil
         case .meta: return nil
         }
     }
@@ -45,6 +52,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
         case .gemini: return "Gratis (ada limit harian) — ambil di Google AI Studio."
         case .chatgpt: return "Berbayar — butuh saldo di akun OpenAI."
         case .claude: return "Berbayar — butuh saldo di akun Anthropic."
+        case .custom: return "Endpoint sendiri yang kompatibel dengan OpenAI (format chat/completions). Isi URL dasar, model, dan API key di bawah."
         case .meta: return "Meta tidak menyediakan API publik untuk asisten Meta AI."
         }
     }
@@ -98,12 +106,12 @@ enum KeychainHelper {
 // MARK: - Streaming AI client (SSE for all three APIs)
 
 enum AIClient {
-    static func ask(provider: AIProvider, model: String, apiKey: String,
+    static func ask(provider: AIProvider, model: String, apiKey: String, endpoint: String = "",
                     question: String, pageTitle: String, pageURL: String, pageText: String,
                     onToken: @escaping (String) -> Void,
                     onDone: @escaping (String?) -> Void) {
         let prompt = buildPrompt(question: question, pageTitle: pageTitle, pageURL: pageURL, pageText: pageText)
-        guard let request = makeRequest(provider: provider, model: model, apiKey: apiKey, prompt: prompt) else {
+        guard let request = makeRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, prompt: prompt) else {
             onDone("Tidak bisa membuat permintaan untuk \(provider.displayName).")
             return
         }
@@ -124,7 +132,17 @@ enum AIClient {
         return parts.joined(separator: "\n\n")
     }
 
-    private static func makeRequest(provider: AIProvider, model: String, apiKey: String, prompt: String) -> URLRequest? {
+    /// Accepts a base URL ("https://host/v3", trailing slash tolerated)
+    /// or a full chat/completions URL, and returns the URL to POST to.
+    private static func chatCompletionsURL(baseURL: String) -> URL? {
+        var base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        while base.hasSuffix("/") { base.removeLast() }
+        guard !base.isEmpty else { return nil }
+        if base.hasSuffix("/chat/completions") { return URL(string: base) }
+        return URL(string: base + "/chat/completions")
+    }
+
+    private static func makeRequest(provider: AIProvider, model: String, apiKey: String, endpoint: String, prompt: String) -> URLRequest? {
         switch provider {
         case .gemini:
             guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):streamGenerateContent?alt=sse&key=\(apiKey)") else { return nil }
@@ -133,8 +151,17 @@ enum AIClient {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try? JSONSerialization.data(withJSONObject: ["contents": [["parts": [["text": prompt]]]]])
             return req
-        case .chatgpt:
-            guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else { return nil }
+        case .chatgpt, .custom:
+            // Same OpenAI chat/completions shape; Custom just points it
+            // at the user's own base URL instead of api.openai.com.
+            let urlString: String
+            if provider == .custom {
+                guard let url = chatCompletionsURL(baseURL: endpoint) else { return nil }
+                urlString = url.absoluteString
+            } else {
+                urlString = "https://api.openai.com/v1/chat/completions"
+            }
+            guard let url = URL(string: urlString) else { return nil }
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
             req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -208,7 +235,7 @@ enum AIClient {
                   let firstPart = parts.first,
                   let text = firstPart["text"] as? String else { return nil }
             return text
-        case .chatgpt:
+        case .chatgpt, .custom:
             guard let choices = json["choices"] as? [[String: Any]],
                   let first = choices.first,
                   let delta = first["delta"] as? [String: Any],
@@ -237,6 +264,7 @@ struct AskAIView: View {
 
     @State private var provider: AIProvider = .gemini
     @State private var model = ""
+    @State private var endpoint = ""
     @State private var apiKey = ""
     @State private var keySaved = false
     @State private var question = ""
@@ -274,6 +302,15 @@ struct AskAIView: View {
                         metaCard
                     } else {
                         VStack(alignment: .leading, spacing: 8) {
+                            if provider == .custom {
+                                Text("Endpoint").font(.headline)
+                                TextField("https://contoh.com/v3", text: $endpoint)
+                                    .autocapitalization(.none).autocorrectionDisabled()
+                                    .padding(.horizontal, 12).padding(.vertical, 10)
+                                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                Text("URL dasar endpoint-nya — boleh juga ditempel lengkap sampai /chat/completions. Permintaan dikirim persis seperti contoh curl: POST, header Authorization Bearer, body model + messages.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                             Text("Model").font(.headline)
                             TextField("Model", text: $model)
                                 .autocapitalization(.none).autocorrectionDisabled()
@@ -335,7 +372,7 @@ struct AskAIView: View {
                             .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
                             .foregroundStyle(.white)
                         }
-                        .disabled(isLoading || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (provider.needsKey && apiKey.isEmpty))
+                        .disabled(isLoading || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (provider.needsKey && apiKey.isEmpty) || missingEndpoint)
                     }
 
                     if let errorText {
@@ -376,6 +413,14 @@ struct AskAIView: View {
             store.browserSettings.aiModels[provider.rawValue] = newValue
             store.saveBrowserSettings()
         }
+        .onChange(of: endpoint) { newValue in
+            store.browserSettings.aiCustomEndpoint = newValue
+            store.saveBrowserSettings()
+        }
+    }
+
+    private var missingEndpoint: Bool {
+        provider == .custom && endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func quickAction(_ text: String) -> some View {
@@ -386,11 +431,12 @@ struct AskAIView: View {
         .font(.subheadline)
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(Color(.secondarySystemBackground), in: Capsule())
-        .disabled(isLoading || (provider.needsKey && apiKey.isEmpty))
+        .disabled(isLoading || (provider.needsKey && apiKey.isEmpty) || missingEndpoint)
     }
 
     private func loadModelAndKey() {
         model = store.browserSettings.aiModels[provider.rawValue] ?? provider.defaultModel
+        endpoint = store.browserSettings.aiCustomEndpoint
         let saved = KeychainHelper.load(account: provider.rawValue) ?? ""
         apiKey = saved
         keySaved = !saved.isEmpty
@@ -408,11 +454,15 @@ struct AskAIView: View {
             errorText = "Isi nama model dulu."
             return
         }
+        guard !missingEndpoint else {
+            errorText = "Isi URL endpoint dulu."
+            return
+        }
         isLoading = true
         answer = ""
         errorText = nil
         AIClient.ask(
-            provider: provider, model: model, apiKey: apiKey,
+            provider: provider, model: model, apiKey: apiKey, endpoint: endpoint,
             question: q, pageTitle: pageTitle, pageURL: pageURL, pageText: pageText,
             onToken: { token in answer += token },
             onDone: { message in
