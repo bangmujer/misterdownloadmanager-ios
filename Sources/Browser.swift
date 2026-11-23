@@ -1107,10 +1107,14 @@ final class BrowserSession: ObservableObject {
         return Math.max(0, Math.floor(d / SPEED));
       }
       window.setTimeout = function(fn, delay) {
+        // Freeze wins over bypass: if the freeze script ran (before or
+        // after this one), page timers must never fire at all.
+        if (window.__mdmTimerFrozen) return 0;
         var args = Array.prototype.slice.call(arguments, 2);
         return nativeSetTimeout.apply(window, [fn, scaleDelay(delay)].concat(args));
       };
       window.setInterval = function(fn, delay) {
+        if (window.__mdmTimerFrozen) return 0;
         var args = Array.prototype.slice.call(arguments, 2);
         return nativeSetInterval.apply(window, [fn, scaleDelay(delay)].concat(args));
       };
@@ -1142,6 +1146,9 @@ final class BrowserSession: ObservableObject {
         return text;
       }
       function scan() {
+        // Frozen site: do not re-enable timer-gated buttons either —
+        // the bypass scanner must stay out of the way entirely.
+        if (window.__mdmTimerFrozen) return;
         try {
           if (!document.body) return;
           var els = document.querySelectorAll('a, button, input[type="button"], input[type="submit"]');
@@ -1175,20 +1182,41 @@ final class BrowserSession: ObservableObject {
     /// or by human-verification gates are untouched, and pages whose
     /// own rendering depends on timers may look stuck; that is the
     /// point of freezing, so it is per-site only.
+    /// Normalises a user-typed host entry ("https://www.contoh.com/x",
+    /// "WWW.Contoh.COM:8080") to a bare lowercase host ("contoh.com"),
+    /// so freeze/exception lists match regardless of how the host was
+    /// entered or whether the page is on www. or a subdomain.
+    static func cleanHostEntry(_ raw: String) -> String {
+        var h = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let range = h.range(of: "://") { h = String(h[range.upperBound...]) }
+        if let slash = h.firstIndex(of: "/") { h = String(h[..<slash]) }
+        if let q = h.firstIndex(of: "?") { h = String(h[..<q]) }
+        if let colon = h.firstIndex(of: ":") { h = String(h[..<colon]) }
+        while h.hasSuffix(".") { h.removeLast() }
+        return h
+    }
+
     static func timerFreezeScript(hosts: [String]) -> String {
         // Only hostname-safe characters reach the script, so a crafted
         // host entry cannot break out of the embedded JS string.
-        let list = hosts.map { host in
-            "\"" + host.lowercased().filter { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" } + "\""
-        }.joined(separator: ",")
+        let list = hosts.map { BrowserSession.cleanHostEntry($0) }
+            .filter { !$0.isEmpty }
+            .map { host in
+                "\"" + host.filter { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" } + "\""
+            }.joined(separator: ",")
         return """
         (function() {
-          if (window.__mdmTimerFreeze) return;
+          if (window.__mdmTimerFrozen) return;
           var HOSTS = [\(list)];
           var host = (location.hostname || '').toLowerCase();
-          var match = HOSTS.some(function(h) { return host === h || host.endsWith('.' + h); });
+          var bare = host.replace(/^www\\./, '');
+          function norm(h) { return h.replace(/^www\\./, ''); }
+          var match = HOSTS.some(function(h) {
+            h = norm(h);
+            return bare === h || bare.endsWith('.' + h);
+          });
           if (!match) return;
-          window.__mdmTimerFreeze = true;
+          window.__mdmTimerFrozen = true;
           window.setTimeout = function() { return 0; };
           window.setInterval = function() { return 0; };
         })()
@@ -1956,10 +1984,10 @@ struct BrowserView: View {
                 Button { addCurrentToBookmarks() } label: { Label("Tambah ke favorit", systemImage: "star") }
                 if let host = session.selectedTab?.host, !host.isEmpty {
                     Button { toggleFreezeTimer(for: host) } label: {
-                        Label(store.browserSettings.freezeTimerHosts.contains(host) ? "Freeze timer di situs ini ✓" : "Freeze timer di situs ini", systemImage: "timer")
+                        Label(hostMatches(host, in: store.browserSettings.freezeTimerHosts) ? "Freeze timer di situs ini ✓" : "Freeze timer di situs ini", systemImage: "timer")
                     }
                     Button { toggleCompatMode(for: host) } label: {
-                        Label(store.browserSettings.drmCompatHosts.contains(host) ? "Mode kompatibilitas di situs ini ✓" : "Mode kompatibilitas di situs ini", systemImage: "play.display")
+                        Label(hostMatches(host, in: store.browserSettings.drmCompatHosts) ? "Mode kompatibilitas di situs ini ✓" : "Mode kompatibilitas di situs ini", systemImage: "play.display")
                     }
                 }
                 Button { openAI() } label: { Label("Minta AI", systemImage: "sparkles") }
@@ -2043,12 +2071,28 @@ struct BrowserView: View {
         session.reload()
     }
 
+    /// www-insensitive host-list match (www.contoh.com == contoh.com,
+    /// subdomains of a listed host match too).
+    private func hostMatches(_ host: String, in entries: [String]) -> Bool {
+        func bare(_ s: String) -> String {
+            var h = BrowserSession.cleanHostEntry(s)
+            if h.hasPrefix("www.") { h = String(h.dropFirst(4)) }
+            return h
+        }
+        let h = bare(host)
+        return entries.contains { e in
+            let b = bare(e)
+            return h == b || h.hasSuffix("." + b)
+        }
+    }
+
     /// Per-site freeze-timer toggle: adds/removes the current host.
     /// Settings changes re-apply rules and reload via onReceive.
     private func toggleFreezeTimer(for host: String) {
+        let host = BrowserSession.cleanHostEntry(host)
         var hosts = store.browserSettings.freezeTimerHosts
-        if hosts.contains(host) {
-            hosts.removeAll { $0 == host }
+        if hostMatches(host, in: hosts) {
+            hosts.removeAll { hostMatches($0, in: [host]) }
         } else {
             hosts.append(host)
         }
@@ -2059,9 +2103,10 @@ struct BrowserView: View {
     /// Compatibility-mode toggle for the current host (DRM video sites):
     /// settings changes re-apply rules and reload via onReceive.
     private func toggleCompatMode(for host: String) {
+        let host = BrowserSession.cleanHostEntry(host)
         var hosts = store.browserSettings.drmCompatHosts
-        if hosts.contains(host) {
-            hosts.removeAll { $0 == host }
+        if hostMatches(host, in: hosts) {
+            hosts.removeAll { hostMatches($0, in: [host]) }
         } else {
             hosts.append(host)
         }
@@ -3566,7 +3611,7 @@ struct AdBlockPanelView: View {
                         get: { freezeText },
                         set: { newValue in
                             freezeText = newValue
-                            store.browserSettings.freezeTimerHosts = newValue.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+                            store.browserSettings.freezeTimerHosts = newValue.components(separatedBy: .newlines).map { BrowserSession.cleanHostEntry($0) }.filter { !$0.isEmpty }
                         }))
                         .frame(minHeight: 60)
                         .onAppear { freezeText = store.browserSettings.freezeTimerHosts.joined(separator: "\n") }
