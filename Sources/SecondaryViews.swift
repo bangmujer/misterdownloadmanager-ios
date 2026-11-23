@@ -489,7 +489,7 @@ struct WQDirView: View {
         HStack {
             if isEditing {
                 Image(systemName: browser.selection.contains(url) ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(browser.selection.contains(url) ? .tint : .secondary)
+                    .foregroundStyle(browser.selection.contains(url) ? Color.accentColor : Color.secondary)
             }
             Image(systemName: isDir ? "folder.fill" : iconFor(url)).foregroundStyle(.tint)
             VStack(alignment: .leading) {
