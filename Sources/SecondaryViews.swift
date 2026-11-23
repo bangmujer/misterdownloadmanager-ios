@@ -84,7 +84,11 @@ struct SettingsView: View {
                             Text(engine).tag(engine)
                         }
                     }
-                    Toggle("Desktop site", isOn: $store.browserSettings.desktopMode)
+                    Picker("User Agent", selection: $store.browserSettings.userAgentPreset) {
+                        ForEach(UserAgentPreset.allCases) { preset in
+                            Text(preset.label).tag(preset.rawValue)
+                        }
+                    }
                     TextField("Home page", text: $store.browserSettings.homePage)
                         .autocapitalization(.none).autocorrectionDisabled()
                 }

@@ -51,7 +51,13 @@ final class DownloadStore: ObservableObject {
     }
     private func loadBrowserSettings() {
         guard let data = try? Data(contentsOf: browserSettingsURL),
-              let decoded = try? JSONDecoder().decode(BrowserSettings.self, from: data) else { return }
+              var decoded = try? JSONDecoder().decode(BrowserSettings.self, from: data) else { return }
+        // One-time migration: the old "Desktop site" switch becomes the
+        // Safari Mac template; afterwards the preset is the only source.
+        if decoded.desktopMode && decoded.userAgentPreset == UserAgentPreset.default.rawValue {
+            decoded.userAgentPreset = UserAgentPreset.mac.rawValue
+            decoded.desktopMode = false
+        }
         browserSettings = decoded
     }
 

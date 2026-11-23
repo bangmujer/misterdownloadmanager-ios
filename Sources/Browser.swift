@@ -72,6 +72,16 @@ struct BrowserSettings: Codable {
     var extensions: [BrowserExtension] = BrowserExtension.builtins
     var homePage: String = "https://www.google.com"
     var desktopMode: Bool = false
+    // Kept only so saved settings from the old "Desktop site" switch still
+    // decode; loadBrowserSettings migrates it once to the preset below.
+    // The preset is the only source of the user agent now.
+    // Ready-made user-agent template id ("default" = WebKit's own UA).
+    var userAgentPreset: String = UserAgentPreset.default.rawValue
+
+    /// The override UA for the selected template, or nil for WebKit's own.
+    var effectiveUserAgent: String? {
+        UserAgentPreset(rawValue: userAgentPreset)?.uaString
+    }
     var searchEngine: String = "Google"
     // Media: background playback (incl. YouTube) + Picture in Picture.
     // Both default ON and can be switched off in settings.
@@ -125,6 +135,37 @@ struct BrowserSettings: Codable {
         "ChatGPT": "gpt-4o-mini",
         "Claude": "claude-3-5-haiku-20241022",
     ]
+}
+
+// MARK: - User-agent templates ("tinggal pilih")
+
+/// Ready-made user-agent strings. `.default` means no override: WKWebView
+/// sends its own UA (mobile Safari on this device).
+enum UserAgentPreset: String, CaseIterable, Identifiable {
+    case `default`, iphone, ipad, mac, chromeWindows, chromeAndroid, firefoxWindows
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .default: return "Default (perangkat ini)"
+        case .iphone: return "Safari iPhone"
+        case .ipad: return "Safari iPad"
+        case .mac: return "Safari Mac (desktop)"
+        case .chromeWindows: return "Chrome Windows (desktop)"
+        case .chromeAndroid: return "Chrome Android"
+        case .firefoxWindows: return "Firefox Windows (desktop)"
+        }
+    }
+    var uaString: String? {
+        switch self {
+        case .default: return nil
+        case .iphone: return "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1"
+        case .ipad: return "Mozilla/5.0 (iPad; CPU OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1"
+        case .mac: return "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15"
+        case .chromeWindows: return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        case .chromeAndroid: return "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+        case .firefoxWindows: return "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"
+        }
+    }
 }
 
 // MARK: - Search engines (Google is the default)
@@ -868,9 +909,7 @@ final class BrowserSession: ObservableObject {
                     // Safari) user agent: a desktop UA can make a video
                     // site serve Widevine instead of FairPlay, which iOS
                     // cannot play at all.
-                    webView.customUserAgent = (compat || !settings.desktopMode)
-                        ? nil
-                        : "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+                    webView.customUserAgent = compat ? nil : settings.effectiveUserAgent
     }
 
     func findMedia() {
@@ -2190,8 +2229,10 @@ struct BrowserView: View {
                     }
                 }
                 Button { openAI() } label: { Label("Minta AI", systemImage: "sparkles") }
-                Button { toggleDesktopMode() } label: {
-                    Label(store.browserSettings.desktopMode ? "Mode desktop ✓" : "Mode desktop", systemImage: "desktopcomputer")
+                Picker("User Agent", selection: $store.browserSettings.userAgentPreset) {
+                    ForEach(UserAgentPreset.allCases) { preset in
+                        Text(preset.label).tag(preset.rawValue)
+                    }
                 }
                 if let host = session.selectedTab?.host, !host.isEmpty, session.selectedTab?.showsStartPage != true {
                     Button { adjustZoom(by: -0.1) } label: { Label("Perkecil tampilan", systemImage: "minus.magnifyingglass") }
@@ -2287,13 +2328,6 @@ struct BrowserView: View {
         isEditingAddress = false
         session.navigateSelected(to: url)
         addressDraft = url.host ?? url.absoluteString
-    }
-
-    private func toggleDesktopMode() {
-        store.browserSettings.desktopMode.toggle()
-        store.saveBrowserSettings()
-        session.applyRulesAndScripts(settings: store.browserSettings)
-        session.reload()
     }
 
     /// www-insensitive host-list match (www.contoh.com == contoh.com,
@@ -3858,7 +3892,11 @@ struct AdBlockPanelView: View {
                             Text(engine).tag(engine)
                         }
                     }
-                    Toggle("Desktop site", isOn: $store.browserSettings.desktopMode)
+                    Picker("User Agent", selection: $store.browserSettings.userAgentPreset) {
+                        ForEach(UserAgentPreset.allCases) { preset in
+                            Text(preset.label).tag(preset.rawValue)
+                        }
+                    }
                     TextField("Home page", text: $store.browserSettings.homePage)
                         .autocapitalization(.none).autocorrectionDisabled()
                 }
