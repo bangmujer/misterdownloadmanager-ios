@@ -951,6 +951,26 @@ final class BrowserSession: ObservableObject {
         saveTabs()
     }
 
+    /// Drag-and-drop grouping: dropping one tab onto another merges
+    /// them into a group folder — the dragged tab joins the target's
+    /// group, the target joins the dragged tab's group, or a new group
+    /// is created holding both. Dropping a tab onto itself is a no-op.
+    func mergeTabsIntoGroup(draggedID: UUID, targetID: UUID) {
+        guard draggedID != targetID else { return }
+        guard let target = tabs.first(where: { $0.id == targetID }),
+              tabs.contains(where: { $0.id == draggedID }) else { return }
+        if let gid = target.groupID {
+            setTabGroup(draggedID, groupID: gid)
+        } else if let dragged = tabs.first(where: { $0.id == draggedID }), let gid = dragged.groupID {
+            setTabGroup(targetID, groupID: gid)
+        } else {
+            _ = createGroup(
+                name: "Grup baru",
+                colorHex: BrowserTabGroup.presetColors.randomElement() ?? 0x34C759,
+                tabIDs: [targetID, draggedID])
+        }
+    }
+
     func deleteGroup(_ id: UUID) {
         for idx in tabs.indices where tabs[idx].groupID == id { tabs[idx].groupID = nil }
         groups.removeAll { $0.id == id }
@@ -4430,6 +4450,7 @@ struct TabOverviewView: View {
     @State private var showingNewGroup = false
     @State private var newGroupName = ""
     @State private var newGroupColor: Int = BrowserTabGroup.presetColors[0]
+    @State private var dropTargetID: UUID?
     @FocusState private var filterFocused: Bool
 
     private func matches(_ tab: BrowserTabState) -> Bool {
@@ -4567,12 +4588,58 @@ struct TabOverviewView: View {
         .buttonStyle(.plain)
     }
 
+    private enum TabGridItem: Identifiable {
+        case tab(BrowserTabState)
+        case group(BrowserTabGroup)
+        var id: UUID {
+            switch self {
+            case .tab(let t): return t.id
+            case .group(let g): return g.id
+            }
+        }
+    }
+
+    /// Tabs that belong to a group collapse into one folder card in
+    /// the grid (the first member's slot); ungrouped tabs stay as
+    /// individual cards. This is what makes "Buat grup baru dari tab
+    /// ini" visible: without it the grouped tab kept sitting in the
+    /// grid with only a tiny color dot, looking like nothing happened.
+    private func gridItems(for tabs: [BrowserTabState]) -> [TabGridItem] {
+        var items: [TabGridItem] = []
+        var seenGroups: Set<UUID> = []
+        for tab in tabs {
+            if let g = session.group(of: tab) {
+                guard !seenGroups.contains(g.id) else { continue }
+                seenGroups.insert(g.id)
+                items.append(.group(g))
+            } else {
+                items.append(.tab(tab))
+            }
+        }
+        return items
+    }
+
     private func tabGrid(tabs: [BrowserTabState]) -> some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
-            ForEach(tabs) { tab in
-                TabCardView(session: session, tab: tab) {
-                    session.select(tab.id)
-                    dismiss()
+            ForEach(gridItems(for: tabs)) { item in
+                switch item {
+                case .tab(let tab):
+                    TabCardView(session: session, tab: tab, highlighted: dropTargetID == tab.id) {
+                        session.select(tab.id)
+                        dismiss()
+                    }
+                    .onDrag { NSItemProvider(object: tab.id.uuidString as NSString) }
+                    .onDrop(of: [UTType.text], delegate: TabDropDelegate(targetID: tab.id, dropTargetID: $dropTargetID) { draggedID in
+                        session.mergeTabsIntoGroup(draggedID: draggedID, targetID: tab.id)
+                    })
+                case .group(let group):
+                    NavigationLink(value: OverviewDestination.group(group.id)) {
+                        GroupFolderCardView(session: session, group: group, highlighted: dropTargetID == group.id)
+                    }
+                    .buttonStyle(.plain)
+                    .onDrop(of: [UTType.text], delegate: TabDropDelegate(targetID: group.id, dropTargetID: $dropTargetID) { draggedID in
+                        session.setTabGroup(draggedID, groupID: group.id)
+                    })
                 }
             }
         }
@@ -4708,6 +4775,7 @@ struct TabOverviewView: View {
 struct TabCardView: View {
     @ObservedObject var session: BrowserSession
     var tab: BrowserTabState
+    var highlighted: Bool = false
     var onSelect: () -> Void
 
     var body: some View {
@@ -4754,6 +4822,7 @@ struct TabCardView: View {
         }
         .padding(10)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.accentColor, lineWidth: highlighted ? 2.5 : 0))
         .contextMenu {
             Button { onSelect() } label: { Label("Buka tab", systemImage: "arrow.up.forward.app") }
             if !session.groups.isEmpty {
@@ -4780,6 +4849,84 @@ struct TabCardView: View {
             } label: { Label("Tutup tab", systemImage: "xmark") }
         }
         .onTapGesture { onSelect() }
+    }
+}
+
+/// Drop handling for tab cards and group folder cards in the tab
+/// overview: dragging a tab onto another tab (or onto a group folder)
+/// groups them. The drop target is highlighted while the drag hovers.
+struct TabDropDelegate: DropDelegate {
+    var targetID: UUID
+    var onDropTab: (UUID) -> Void
+    @Binding var dropTargetID: UUID?
+
+    func dropEntered(info: DropInfo) { dropTargetID = targetID }
+    func dropExited(info: DropInfo) { if dropTargetID == targetID { dropTargetID = nil } }
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dropTargetID = nil
+        guard let provider = info.itemProviders(for: [UTType.text]).first else { return false }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let s = object as? String, let id = UUID(uuidString: s) else { return }
+            DispatchQueue.main.async { onDropTab(id) }
+        }
+        return true
+    }
+}
+
+/// A group shown as one folder card in the tab grid: favicon collage,
+/// group name in its color, and member count. Tapping opens the group
+/// detail; dropping a tab onto it adds the tab to the group.
+struct GroupFolderCardView: View {
+    @ObservedObject var session: BrowserSession
+    var group: BrowserTabGroup
+    var highlighted: Bool = false
+
+    var members: [BrowserTabState] { session.tabs(in: group) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(group.color.opacity(0.18))
+                    .frame(height: 118)
+                if members.isEmpty {
+                    Image(systemName: "folder.fill")
+                        .font(.largeTitle)
+                        .foregroundStyle(group.color)
+                } else {
+                    HStack(spacing: 10) {
+                        ForEach(members.prefix(4)) { tab in
+                            FaviconView(host: tab.host, size: 30)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity)
+            HStack(spacing: 6) {
+                Circle().fill(group.color).frame(width: 8, height: 8)
+                Text(group.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Spacer()
+                Text("\(members.count)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Color(.tertiarySystemFill), in: Capsule())
+            }
+            Text(members.isEmpty ? "Grup kosong" : members.map { $0.displayTitle }.joined(separator: ", "))
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+        .padding(10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.accentColor, lineWidth: highlighted ? 2.5 : 0))
+        .contextMenu {
+            Button(role: .destructive) {
+                session.deleteGroup(group.id)
+            } label: {
+                Label("Hapus grup (tab tetap ada)", systemImage: "trash")
+            }
+        }
     }
 }
 
