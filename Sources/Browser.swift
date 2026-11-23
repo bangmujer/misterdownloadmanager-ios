@@ -5241,6 +5241,7 @@ struct AdBlockPanelView: View {
     @State private var editor: PanelEditor?
     @State private var showingExtensions = false
     @State private var showingNewExtension = false
+    @State private var showingAIKeyEditor = false
     @State private var editingExtension: BrowserExtension?
     @State private var pickerPresenter = ScriptPickerPresenter()
     @State private var scriptImportResult: String?
@@ -5280,6 +5281,16 @@ struct AdBlockPanelView: View {
                 }
                 Section("AI") {
                     cycleRow(title: "Minta AI", value: store.browserSettings.aiProvider) { cycleAIProvider() }
+                    Button { showingAIKeyEditor = true } label: {
+                        HStack {
+                            Text("API Key")
+                            Spacer()
+                            Text(aiKeyLabel).foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(currentAIProvider == .meta)
                     editorRow(title: "Model AI", detail: aiModelLabel) { editor = .aiModel }
                 }
                 Section("Browser") {
@@ -5315,6 +5326,7 @@ struct AdBlockPanelView: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Selesai") { dismiss() } } }
         }
         .sheet(item: $editor) { PanelEditorSheet(editor: $0) }
+        .sheet(isPresented: $showingAIKeyEditor) { AIKeyEditorView(provider: currentAIProvider) }
         .sheet(isPresented: $showingExtensions) { extensionsSheet }
     }
 
@@ -5412,6 +5424,17 @@ struct AdBlockPanelView: View {
         return model.isEmpty ? "Default" : model
     }
 
+    private var currentAIProvider: AIProvider {
+        AIProvider(rawValue: store.browserSettings.aiProvider) ?? .gemini
+    }
+
+    private var aiKeyLabel: String {
+        let provider = currentAIProvider
+        if provider == .meta { return "Tidak perlu kunci" }
+        let saved = KeychainHelper.load(account: provider.rawValue) ?? ""
+        return saved.isEmpty ? "Belum diisi" : "Tersimpan"
+    }
+
     private var homeHostLabel: String {
         URL(string: store.browserSettings.homePage)?.host ?? store.browserSettings.homePage
     }
@@ -5506,7 +5529,7 @@ struct AdBlockPanelView: View {
             case .freeze: return "Satu host per baris — timer halaman dibekukan total di situs itu."
             case .compat: return "Satu host per baris — AdBlock, userscript & UA desktop dimatikan di situs itu."
             case .homePage: return "Alamat halaman beranda."
-            case .aiModel: return "Model untuk provider AI yang sedang dipilih. API key disimpan di Keychain, bukan di sini."
+            case .aiModel: return "Model untuk provider AI yang sedang dipilih. API key diisi di baris API Key (tersimpan di Keychain)."
             }
         }
 

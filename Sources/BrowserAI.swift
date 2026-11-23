@@ -519,3 +519,87 @@ struct AskAIView: View {
         return parts.joined(separator: "\n\n")
     }
 }
+
+// MARK: - API key editor (Settings → AI → API Key)
+
+/// The Settings AI section used to have no way to enter a key at all:
+/// the only key field lived inside the Ask AI sheet. This editor puts
+/// one next to the provider/model rows. Keys go to the Keychain only,
+/// never to the settings JSON file.
+struct AIKeyEditorView: View {
+    @EnvironmentObject var store: DownloadStore
+    @Environment(\.dismiss) var dismiss
+    var provider: AIProvider
+
+    @State private var apiKey = ""
+    @State private var showKey = false
+    @State private var keySaved = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    if provider == .meta {
+                        Text("Meta tidak menyediakan API publik untuk asisten Meta AI, jadi tidak ada kunci yang perlu diisi.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    } else {
+                        HStack {
+                            Group {
+                                if showKey {
+                                    TextField("API key \(provider.displayName)", text: $apiKey)
+                                } else {
+                                    SecureField("API key \(provider.displayName)", text: $apiKey)
+                                }
+                            }
+                            .autocapitalization(.none).autocorrectionDisabled()
+                            Button {
+                                showKey.toggle()
+                            } label: {
+                                Image(systemName: showKey ? "eye.slash" : "eye")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if let keyURL = provider.keyURL, let url = URL(string: keyURL) {
+                            Link("Dapatkan API key \(provider.displayName)…", destination: url)
+                                .font(.subheadline)
+                        }
+                        if keySaved && !apiKey.isEmpty {
+                            Label("Tersimpan di Keychain", systemImage: "lock.fill")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("API key \(provider.displayName)")
+                } footer: {
+                    Text("Kunci hanya tersimpan di Keychain perangkat ini — tidak pernah ditulis ke file pengaturan dan tidak pernah dikirim ke mana pun kecuali API provider yang dipilih.")
+                }
+                if provider != .meta {
+                    Section {
+                        Button("Simpan kunci") {
+                            KeychainHelper.save(account: provider.rawValue, value: apiKey)
+                            keySaved = true
+                            store.objectWillChange.send()
+                        }
+                        .disabled(apiKey.isEmpty)
+                        if keySaved {
+                            Button("Hapus kunci", role: .destructive) {
+                                KeychainHelper.delete(account: provider.rawValue)
+                                apiKey = ""
+                                keySaved = false
+                                store.objectWillChange.send()
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("API Key \(provider.displayName)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Selesai") { dismiss() } } }
+            .onAppear {
+                let saved = KeychainHelper.load(account: provider.rawValue) ?? ""
+                apiKey = saved
+                keySaved = !saved.isEmpty
+            }
+        }
+    }
+}
