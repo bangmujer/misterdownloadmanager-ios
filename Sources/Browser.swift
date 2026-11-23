@@ -88,6 +88,11 @@ struct BrowserSettings: Codable {
     // never fire — countdown/trial timers stop instead of speeding up.
     // Hosts, e.g. ["example.com"]; subdomains match too.
     var freezeTimerHosts: [String] = []
+    // Compatibility mode hosts (e.g. DRM video sites like cubmu.com):
+    // on these pages AdBlock rules, userscripts and the desktop user
+    // agent are switched off, because they can break license/key
+    // requests and player code. The page itself still runs in WKWebView.
+    var drmCompatHosts: [String] = []
     // No-redirect mode: download clicks go straight to the final link,
     // cross-host popups are dropped.
     var noRedirects: Bool = true
@@ -684,29 +689,61 @@ final class BrowserSession: ObservableObject {
         }
     }
 
+    /// Last compiled content-rule lists, kept so compatibility mode can
+    /// re-apply them when a tab leaves a compat host without recompiling.
+    private var compiledLists: [WKContentRuleList] = []
+
     func applyRulesAndScripts(settings: BrowserSettings) {
         latestSettings = settings
         AdBlockRules.compile(settings: settings) { [weak self] lists in
             guard let self else { return }
             DispatchQueue.main.async {
+                self.compiledLists = lists
                 self.blockedStatus = lists.isEmpty ? "AdBlock: off (no rules)" : "AdBlock: on"
                 for (_, webView) in self.webViews {
-                    let ucc = webView.configuration.userContentController
-                    ucc.removeAllContentRuleLists()
-                    for list in lists { ucc.add(list) }
-                    ucc.removeAllUserScripts()
+                    self.configureContent(for: webView, settings: settings, lists: lists)
+                }
+            }
+        }
+    }
+
+    /// Compatibility hosts (e.g. DRM video sites): content rules and
+    /// injected scripts are stripped for these pages, because blockers
+    /// and page scripts can break license/key requests and player code.
+    func isCompatHost(_ host: String?) -> Bool {
+        guard let host = host?.lowercased(), !host.isEmpty else { return false }
+        return latestSettings.drmCompatHosts.contains { h in
+            let h = h.lowercased()
+            return host == h || host.hasSuffix("." + h)
+        }
+    }
+
+    /// (Re)applies content rules + user scripts to one web view, honouring
+    /// compatibility mode for its current host. Called after every
+    /// navigation commit, so leaving a compat host restores blocking.
+    func refreshCompatibility(for webView: WKWebView) {
+        configureContent(for: webView, settings: latestSettings, lists: compiledLists)
+    }
+
+    func configureContent(for webView: WKWebView, settings: BrowserSettings, lists: [WKContentRuleList]) {
+        let ucc = webView.configuration.userContentController
+        ucc.removeAllContentRuleLists()
+        ucc.removeAllUserScripts()
+        // DevTools bridge: always present so console / fetch / XHR
+        // activity can be shown in the F12 panel.
+        ucc.addUserScript(WKUserScript(
+            source: DevToolsBridge.script,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true))
+        let compat = isCompatHost(webView.url?.host)
+        if !compat {
+            for list in lists { ucc.add(list) }
                     for ext in settings.extensions where ext.enabled {
                         ucc.addUserScript(WKUserScript(
                             source: ext.source,
                             injectionTime: ext.atDocumentStart ? .atDocumentStart : .atDocumentEnd,
                             forMainFrameOnly: true))
                     }
-                    // DevTools bridge: always present so console / fetch / XHR
-                    // activity can be shown in the F12 panel.
-                    ucc.addUserScript(WKUserScript(
-                        source: DevToolsBridge.script,
-                        injectionTime: .atDocumentStart,
-                        forMainFrameOnly: true))
                     // Background playback: keep the page "visible" so players
                     // do not pause themselves when the app backgrounds.
                     if settings.backgroundPlayback {
@@ -754,14 +791,16 @@ final class BrowserSession: ObservableObject {
                             injectionTime: .atDocumentStart,
                             forMainFrameOnly: true))
                     }
+                    }
                     webView.allowsLinkPreview = settings.linkPreview
                     if #available(iOS 16.4, *) { webView.isInspectable = settings.webInspector }
-                    webView.customUserAgent = settings.desktopMode
-                        ? "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
-                        : nil
-                }
-            }
-        }
+                    // Compatibility pages always use the default (mobile
+                    // Safari) user agent: a desktop UA can make a video
+                    // site serve Widevine instead of FairPlay, which iOS
+                    // cannot play at all.
+                    webView.customUserAgent = (compat || !settings.desktopMode)
+                        ? nil
+                        : "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
     }
 
     func findMedia() {
@@ -1526,10 +1565,12 @@ struct BrowserWebView: UIViewRepresentable {
         // in WebKit's hands now and must not be re-issued.
         func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
             session.clearPending(for: tabID)
+            session.refreshCompatibility(for: webView)
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             session.clearPending(for: tabID)
+            session.refreshCompatibility(for: webView)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -1917,6 +1958,9 @@ struct BrowserView: View {
                     Button { toggleFreezeTimer(for: host) } label: {
                         Label(store.browserSettings.freezeTimerHosts.contains(host) ? "Freeze timer di situs ini ✓" : "Freeze timer di situs ini", systemImage: "timer")
                     }
+                    Button { toggleCompatMode(for: host) } label: {
+                        Label(store.browserSettings.drmCompatHosts.contains(host) ? "Mode kompatibilitas di situs ini ✓" : "Mode kompatibilitas di situs ini", systemImage: "play.display")
+                    }
                 }
                 Button { openAI() } label: { Label("Minta AI", systemImage: "sparkles") }
                 Button { toggleDesktopMode() } label: {
@@ -2009,6 +2053,19 @@ struct BrowserView: View {
             hosts.append(host)
         }
         store.browserSettings.freezeTimerHosts = hosts
+        store.saveBrowserSettings()
+    }
+
+    /// Compatibility-mode toggle for the current host (DRM video sites):
+    /// settings changes re-apply rules and reload via onReceive.
+    private func toggleCompatMode(for host: String) {
+        var hosts = store.browserSettings.drmCompatHosts
+        if hosts.contains(host) {
+            hosts.removeAll { $0 == host }
+        } else {
+            hosts.append(host)
+        }
+        store.browserSettings.drmCompatHosts = hosts
         store.saveBrowserSettings()
     }
 
@@ -3401,6 +3458,7 @@ struct AdBlockPanelView: View {
     @State private var scriptImportResult: String?
     @State private var exceptionText = ""
     @State private var freezeText = ""
+    @State private var compatText = ""
 
     var body: some View {
         NavigationStack {
@@ -3513,6 +3571,17 @@ struct AdBlockPanelView: View {
                         .frame(minHeight: 60)
                         .onAppear { freezeText = store.browserSettings.freezeTimerHosts.joined(separator: "\n") }
                     Text("Satu host per baris (mis. contoh.com, subdomain ikut). Di situs yang terdaftar, timer halaman (setTimeout/setInterval) dibekukan total — hitung mundur dan timer trial berhenti, bukan dipercepat. Beda dengan \"Lewati timer\" yang mempercepat semua situs. Timer yang ditegakkan server tidak bisa dibekukan. Bisa juga diaktifkan cepat dari menu ⋯ di situs yang sedang dibuka.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Mode kompatibilitas (situs DRM/video)") {
+                    TextEditor(text: Binding(
+                        get: { compatText },
+                        set: { newValue in
+                            compatText = newValue
+                            store.browserSettings.drmCompatHosts = newValue.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+                        }))
+                        .frame(minHeight: 60)
+                        .onAppear { compatText = store.browserSettings.drmCompatHosts.joined(separator: "\n") }
+                    Text("Satu host per baris (mis. www.cubmu.com). Di situs yang terdaftar, AdBlock, userscript, dan user agent desktop dimatikan — halaman dimuat bersih seperti di Safari, karena pemblokir dan script bisa merusak permintaan lisensi DRM (FairPlay) dan kode player. Bisa juga diaktifkan cepat dari menu ⋯ di situs yang sedang dibuka. WKWebView sendiri mendukung FairPlay; kalau di Safari situsnya jalan tapi di sini tidak, mode ini yang pertama dicoba.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Minta AI di browser") {
                     Picker("AI", selection: $store.browserSettings.aiProvider) {
