@@ -2384,6 +2384,11 @@ struct BrowserView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 76) }
+            // Only the page layer ignores the bottom safe area, so it
+            // paints to the physical bottom edge (under the floating
+            // navbar and tab bar). The navbar VStack below must NOT
+            // ignore it, or it drops underneath the tab bar.
+            .ignoresSafeArea(edges: .bottom)
             VStack(spacing: 8) {
                 if showingFind { findBar }
                 // Floating DevTools button (DevSnoop-style): only when
@@ -2404,9 +2409,9 @@ struct BrowserView: View {
                 floatingNavBar
             }
         }
-        // The page must paint to the physical bottom edge (under the
-        // floating navbar and tab bar) — no white band below the navbar.
-        .ignoresSafeArea(edges: .bottom)
+        // The root respects the bottom safe area so the floating
+        // navbar stays above the tab bar; only the page layer above
+        // ignores it (see the inner ZStack).
         .overlay(alignment: .top) {
             if let notice = capturedNotice {
                 Text(notice)
