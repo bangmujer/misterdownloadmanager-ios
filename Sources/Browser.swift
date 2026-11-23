@@ -1627,8 +1627,15 @@ final class BrowserSession: ObservableObject {
     // the page's move in place, so after scrolling to the very bottom
     // the bar ended up floating high above the pill. Re-asserting the
     // position on every pass locks the bar above the pill no matter
-    // what the page does between passes.
+    // what the page does between passes. But the moved check must be
+    // measured from the NATURAL position: measuring it while the bar
+    // is already lifted reads no movement, applies the translateY
+    // fallback ON TOP of bottom, and lifts the bar twice (the v10
+    // regression — bar floating high with a dead glass slab under the
+    // icons). So reset to the saved originals first, then measure.
     if (eff > 0) {
+      el.style.bottom = origBottom;
+      el.style.transform = origTransform;
       var before = el.getBoundingClientRect().bottom;
       el.style.bottom = eff + 'px';
       var moved = (before - el.getBoundingClientRect().bottom) > 3;
