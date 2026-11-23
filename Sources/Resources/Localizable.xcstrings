@@ -1,0 +1,3556 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "Downloads": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unduhan"
+          }
+        }
+      }
+    },
+    "My Files": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "File Saya"
+          }
+        }
+      }
+    },
+    "Settings": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pengaturan"
+          }
+        }
+      }
+    },
+    "Add URL…": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tambah URL…"
+          }
+        }
+      }
+    },
+    "Add Torrent…": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tambah Torrent…"
+          }
+        }
+      }
+    },
+    "Add Torrent": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tambah Torrent"
+          }
+        }
+      }
+    },
+    "Grab Video from Page…": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ambil Video dari Halaman…"
+          }
+        }
+      }
+    },
+    "Add from Clipboard": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tambah dari Clipboard"
+          }
+        }
+      }
+    },
+    "No downloads": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Belum ada unduhan"
+          }
+        }
+      }
+    },
+    "Tap + to add a link, a torrent, or grab a video from a page.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ketuk + untuk menambah tautan, torrent, atau mengambil video dari halaman."
+          }
+        }
+      }
+    },
+    "Search downloads": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cari unduhan"
+          }
+        }
+      }
+    },
+    "Pause": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jeda"
+          }
+        }
+      }
+    },
+    "Resume / Start": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lanjutkan / Mulai"
+          }
+        }
+      }
+    },
+    "Retry from scratch": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ulang dari awal"
+          }
+        }
+      }
+    },
+    "Delete": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hapus"
+          }
+        }
+      }
+    },
+    "Start": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mulai"
+          }
+        }
+      }
+    },
+    "Add": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tambah"
+          }
+        }
+      }
+    },
+    "Add Download": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tambah Unduhan"
+          }
+        }
+      }
+    },
+    "Link": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tautan"
+          }
+        }
+      }
+    },
+    "Probe link (size / resume)": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Periksa tautan (ukuran / lanjutkan)"
+          }
+        }
+      }
+    },
+    "Size": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ukuran"
+          }
+        }
+      }
+    },
+    "Resume": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lanjutkan"
+          }
+        }
+      }
+    },
+    "Supported": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Didukung"
+          }
+        }
+      }
+    },
+    "Not supported": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tidak didukung"
+          }
+        }
+      }
+    },
+    "Type": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jenis"
+          }
+        }
+      }
+    },
+    "Unknown": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tidak diketahui"
+          }
+        }
+      }
+    },
+    "Save as (optional)": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Simpan sebagai (opsional)"
+          }
+        }
+      }
+    },
+    "Category": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kategori"
+          }
+        }
+      }
+    },
+    "Referer (optional)": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Referer (opsional)"
+          }
+        }
+      }
+    },
+    "Checksum (optional)": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checksum (opsional)"
+          }
+        }
+      }
+    },
+    "Expected hash": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hash yang diharapkan"
+          }
+        }
+      }
+    },
+    "Debrid (optional)": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debrid (opsional)"
+          }
+        }
+      }
+    },
+    "Service": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Layanan"
+          }
+        }
+      }
+    },
+    "Cancel": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Batal"
+          }
+        }
+      }
+    },
+    "Download HLS": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unduh HLS"
+          }
+        }
+      }
+    },
+    "Actions": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tindakan"
+          }
+        }
+      }
+    },
+    "File": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Berkas"
+          }
+        }
+      }
+    },
+    "Name": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nama"
+          }
+        }
+      }
+    },
+    "Downloaded": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terunduh"
+          }
+        }
+      }
+    },
+    "Speed": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kecepatan"
+          }
+        }
+      }
+    },
+    "Connections": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Koneksi"
+          }
+        }
+      }
+    },
+    "Verified": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terverifikasi"
+          }
+        }
+      }
+    },
+    "Extract ZIP here": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekstrak ZIP di sini"
+          }
+        }
+      }
+    },
+    "Delete download": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hapus unduhan"
+          }
+        }
+      }
+    },
+    "Share file": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bagikan berkas"
+          }
+        }
+      }
+    },
+    "Start / Resume": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mulai / Lanjutkan"
+          }
+        }
+      }
+    },
+    "Checksum mismatch — file may be corrupt.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checksum tidak cocok — berkas mungkin rusak."
+          }
+        }
+      }
+    },
+    "Unknown size": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ukuran tidak diketahui"
+          }
+        }
+      }
+    },
+    "7z / RAR extraction needs the 7-Zip helper on desktop and is not available on iOS.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekstraksi 7z / RAR butuh helper 7-Zip di desktop dan tidak tersedia di iOS."
+          }
+        }
+      }
+    },
+    "Unrestricts a file-host link with your own key from Settings → Debrid.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Membuka tautan file-host dengan kunci Anda sendiri dari Pengaturan → Debrid."
+          }
+        }
+      }
+    },
+    "Torrent downloads in this port are experimental: open Add Torrent and pick a .torrent file for peer download. Magnet placeholders do not download by themselves.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unduhan torrent di port ini masih eksperimental: buka Tambah Torrent dan pilih berkas .torrent untuk mengunduh dari peer. Placeholder magnet tidak mengunduh sendiri."
+          }
+        }
+      }
+    },
+    "Options": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opsi"
+          }
+        }
+      }
+    },
+    "Done": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Selesai"
+          }
+        }
+      }
+    },
+    "Close": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tutup"
+          }
+        }
+      }
+    },
+    "Appearance, Language & Scale": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tampilan, Bahasa & Skala"
+          }
+        }
+      }
+    },
+    "Theme": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tema"
+          }
+        }
+      }
+    },
+    "Language": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bahasa"
+          }
+        }
+      }
+    },
+    "Interface scale": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skala antarmuka"
+          }
+        }
+      }
+    },
+    "Notifications & Clipboard": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifikasi & Clipboard"
+          }
+        }
+      }
+    },
+    "Download notifications": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifikasi unduhan"
+          }
+        }
+      }
+    },
+    "Watch clipboard for links": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pantau clipboard untuk tautan"
+          }
+        }
+      }
+    },
+    "Remote control (LAN)": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontrol jarak jauh (LAN)"
+          }
+        }
+      }
+    },
+    "Enable remote control": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aktifkan kontrol jarak jauh"
+          }
+        }
+      }
+    },
+    "Address": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alamat"
+          }
+        }
+      }
+    },
+    "Search engine": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mesin pencari"
+          }
+        }
+      }
+    },
+    "Home page": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Halaman beranda"
+          }
+        }
+      }
+    },
+    "Custom AdBlock (your URL filters)": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AdBlock kustom (filter URL Anda)"
+          }
+        }
+      }
+    },
+    "Custom DNS (stored only)": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DNS kustom (hanya disimpan)"
+          }
+        }
+      }
+    },
+    "iOS URLSession cannot override DNS per app, so a custom DNS value is stored for reference only and does not change resolution.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "URLSession iOS tidak bisa mengganti DNS per aplikasi, jadi nilai DNS kustom hanya disimpan sebagai referensi dan tidak mengubah resolusi."
+          }
+        }
+      }
+    },
+    "Keys stay in this app's settings file on this device. Debrid is experimental in the desktop app too.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kunci hanya tersimpan di berkas pengaturan aplikasi ini di perangkat ini. Debrid juga masih eksperimental di aplikasi desktop."
+          }
+        }
+      }
+    },
+    "Plain HTTP on trusted home Wi-Fi only, while the app is in the foreground. The desktop remote uses HTTPS pairing; that pairing flow is not ported.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HTTP biasa hanya di Wi-Fi rumah tepercaya, saat aplikasi di foreground. Remote desktop memakai pairing HTTPS; alur itu tidak diport."
+          }
+        }
+      }
+    },
+    "Proxy type": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jenis proxy"
+          }
+        }
+      }
+    },
+    "Proxy host": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Host proxy"
+          }
+        }
+      }
+    },
+    "Use proxy": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pakai proxy"
+          }
+        }
+      }
+    },
+    "Wi-Fi only (kill-switch approximation)": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hanya Wi-Fi (perkiraan kill-switch)"
+          }
+        }
+      }
+    },
+    "Queue & Scheduler": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Antrean & Penjadwal"
+          }
+        }
+      }
+    },
+    "Queue enabled": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Antrean aktif"
+          }
+        }
+      }
+    },
+    "Scheduler enabled": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Penjadwal aktif"
+          }
+        }
+      }
+    },
+    "Start downloads paused": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mulai unduhan dalam keadaan jeda"
+          }
+        }
+      }
+    },
+    "Auto-resume on launch": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lanjutkan otomatis saat dibuka"
+          }
+        }
+      }
+    },
+    "Debrid — your own keys": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debrid — kunci Anda sendiri"
+          }
+        }
+      }
+    },
+    "Import .torrent file…": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impor berkas .torrent…"
+          }
+        }
+      }
+    },
+    "Parse magnet": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Urai magnet"
+          }
+        }
+      }
+    },
+    "Announce to tracker": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Umumkan ke tracker"
+          }
+        }
+      }
+    },
+    "No peers yet — announce first.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Belum ada peer — umumkan dulu."
+          }
+        }
+      }
+    },
+    "Download via peers (experimental, sequential)": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unduh via peer (eksperimental, berurutan)"
+          }
+        }
+      }
+    },
+    "Peers": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peer"
+          }
+        }
+      }
+    },
+    "Pieces": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Potongan"
+          }
+        }
+      }
+    },
+    "Comment": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komentar"
+          }
+        }
+      }
+    },
+    "Single file": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Berkas tunggal"
+          }
+        }
+      }
+    },
+    "Files": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Berkas"
+          }
+        }
+      }
+    },
+    "Fetch page & find media": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ambil halaman & cari media"
+          }
+        }
+      }
+    },
+    "About & honest limits": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tentang & batasan jujur"
+          }
+        }
+      }
+    },
+    "Original repository": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repositori asli"
+          }
+        }
+      }
+    },
+    "License: GPL-3.0": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lisensi: GPL-3.0"
+          }
+        }
+      }
+    },
+    "Download": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unduh"
+          }
+        }
+      }
+    },
+    "iOS cannot wake the phone or shut it down like the desktop scheduler. The window only gates starting/pausing while the app runs, and background downloads are limited by iOS.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iOS tidak bisa membangunkan ponsel atau mematikannya seperti penjadwal desktop. Jendela waktu hanya mengatur mulai/jeda saat aplikasi berjalan, dan unduhan background dibatasi iOS."
+          }
+        }
+      }
+    },
+    "The main UI follows the Language choice (Indonesian and English). Some deep or technical screens are still English; more strings are translated over time.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "UI utama mengikuti pilihan Bahasa (Indonesia dan Inggris). Sebagian layar teknis masih berbahasa Inggris; terjemahan string lainnya menyusul."
+          }
+        }
+      }
+    },
+    "Not ported: Chrome extensions and the desktop browser native-messaging host (the in-app browser captures downloads itself instead), system tray, wake/shutdown, yt-dlp/ffmpeg video processing, 7z/RAR via 7-Zip, MCP server, CLI switches, DHT/uTP/UPnP torrenting and background seeding, screen-reader-perfect desktop menus. Nothing here pretends those work.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tidak diport: ekstensi Chrome dan host native-messaging browser desktop (browser di aplikasi menangkap unduhan sendiri), system tray, wake/shutdown, pemrosesan video yt-dlp/ffmpeg, 7z/RAR via 7-Zip, server MCP, switch CLI, torrenting DHT/uTP/UPnP dan seeding background, menu desktop yang sempurna untuk screen reader. Tidak ada yang berpura-pura itu berfungsi."
+          }
+        }
+      }
+    },
+    "Mister Download Manager — iOS port. Original: github.com/anefzaoui/misterdownloadmanager, GPL-3.0, Rust/egui desktop app for Windows/Mac/Linux. This SwiftUI reimplementation keeps the download engine ideas (segmentation, resume, categories, queues, scheduler window, debrid, video grabber, torrent metadata, remote control) within iOS sandbox limits.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mister Download Manager — port iOS. Asli: github.com/anefzaoui/misterdownloadmanager, GPL-3.0, aplikasi desktop Rust/egui untuk Windows/Mac/Linux. Reimplementasi SwiftUI ini mempertahankan ide mesin unduh (segmentasi, lanjutkan, kategori, antrean, jendela penjadwal, debrid, pengambil video, metadata torrent, kontrol jarak jauh) dalam batas sandbox iOS."
+          }
+        }
+      }
+    },
+    "Site configuration": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konfigurasi situs"
+          }
+        }
+      }
+    },
+    "Media on this page": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Media di halaman ini"
+          }
+        }
+      }
+    },
+    "Hard reload": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reload paksa"
+          }
+        }
+      }
+    },
+    "New extension": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekstensi baru"
+          }
+        }
+      }
+    },
+    "Extension name": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nama ekstensi"
+          }
+        }
+      }
+    },
+    "Desktop mode": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mode desktop"
+          }
+        }
+      }
+    },
+    "Images": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gambar"
+          }
+        }
+      }
+    },
+    "Reset": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Atur ulang"
+          }
+        }
+      }
+    },
+    "Background playback": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Putar di background"
+          }
+        }
+      }
+    },
+    "Hapus download?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete download?"
+          }
+        }
+      }
+    },
+    "Hapus + file": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete + file"
+          }
+        }
+      }
+    },
+    "Hapus dari daftar": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete from list"
+          }
+        }
+      }
+    },
+    "Kategori": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Category"
+          }
+        }
+      }
+    },
+    "Userscript diimpor": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Userscript imported"
+          }
+        }
+      }
+    },
+    "Bagikan…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share…"
+          }
+        }
+      }
+    },
+    "Batal": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        }
+      }
+    },
+    "Selesai": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done"
+          }
+        }
+      }
+    },
+    "Tutup": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close"
+          }
+        }
+      }
+    },
+    "Simpan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save"
+          }
+        }
+      }
+    },
+    "Hapus": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete"
+          }
+        }
+      }
+    },
+    "Ubah": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit"
+          }
+        }
+      }
+    },
+    "Tambah": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add"
+          }
+        }
+      }
+    },
+    "Cari di halaman…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find on page…"
+          }
+        }
+      }
+    },
+    "Cari tab…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search tabs…"
+          }
+        }
+      }
+    },
+    "Tab baru": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New tab"
+          }
+        }
+      }
+    },
+    "Tutup tab": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close tab"
+          }
+        }
+      }
+    },
+    "Tutup semua tab": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close all tabs"
+          }
+        }
+      }
+    },
+    "Buka di Tab Baru": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open in New Tab"
+          }
+        }
+      }
+    },
+    "Salin Link": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy Link"
+          }
+        }
+      }
+    },
+    "Pilih login": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose login"
+          }
+        }
+      }
+    },
+    "Isi": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fill"
+          }
+        }
+      }
+    },
+    "Situs ini": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This site"
+          }
+        }
+      }
+    },
+    "Perlindungan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Protection"
+          }
+        }
+      }
+    },
+    "Gestur": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gestures"
+          }
+        }
+      }
+    },
+    "Konten": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Content"
+          }
+        }
+      }
+    },
+    "Ekstensi": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extensions"
+          }
+        }
+      }
+    },
+    "Ekstensi aktif": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Active extensions"
+          }
+        }
+      }
+    },
+    "Laporan Privasi": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privacy Report"
+          }
+        }
+      }
+    },
+    "Lewati timer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skip timers"
+          }
+        }
+      }
+    },
+    "Hanya HTTPS": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "HTTPS only"
+          }
+        }
+      }
+    },
+    "Blokir popup": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Block popups"
+          }
+        }
+      }
+    },
+    "Mesin pencari": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search engine"
+          }
+        }
+      }
+    },
+    "Alamat beranda": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Home page"
+          }
+        }
+      }
+    },
+    "Awal dokumen": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Start of document"
+          }
+        }
+      }
+    },
+    "Akhir dokumen": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "End of document"
+          }
+        }
+      }
+    },
+    "Tidak ada cookie untuk situs ini.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No cookies for this site."
+          }
+        }
+      }
+    },
+    "Tidak ada riwayat.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No history."
+          }
+        }
+      }
+    },
+    "Belum ada bookmark.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No bookmarks yet."
+          }
+        }
+      }
+    },
+    "Tidak ada tab yang cocok.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matching tabs."
+          }
+        }
+      }
+    },
+    "Tidak ada yang cocok dengan pencarian.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No matches for the search."
+          }
+        }
+      }
+    },
+    "Hapus Data Penjelajahan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear Browsing Data"
+          }
+        }
+      }
+    },
+    "Hapus data yang dipilih?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear the selected data?"
+          }
+        }
+      }
+    },
+    "Hapus seluruh riwayat?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear all history?"
+          }
+        }
+      }
+    },
+    "Hapus Semua": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear All"
+          }
+        }
+      }
+    },
+    "Semua data situs web": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All website data"
+          }
+        }
+      }
+    },
+    "Hapus yang sudah dibaca": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear read items"
+          }
+        }
+      }
+    },
+    "Belum dibaca": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unread"
+          }
+        }
+      }
+    },
+    "Grup baru": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New group"
+          }
+        }
+      }
+    },
+    "Buat grup baru": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create new group"
+          }
+        }
+      }
+    },
+    "Buat grup baru dari tab ini": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create new group from this tab"
+          }
+        }
+      }
+    },
+    "Tambah ke grup": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add to group"
+          }
+        }
+      }
+    },
+    "Keluarkan dari grup": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove from group"
+          }
+        }
+      }
+    },
+    "Hapus grup (tab tetap ada)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete group (tabs stay)"
+          }
+        }
+      }
+    },
+    "Ganti nama & warna": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rename & color"
+          }
+        }
+      }
+    },
+    "Nama grup": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group name"
+          }
+        }
+      }
+    },
+    "Warna": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Color"
+          }
+        }
+      }
+    },
+    "Buat": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create"
+          }
+        }
+      }
+    },
+    "Buka tab": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open tab"
+          }
+        }
+      }
+    },
+    "Tambah tab": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add tab"
+          }
+        }
+      }
+    },
+    "Tambah tab ke grup": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add tab to group"
+          }
+        }
+      }
+    },
+    "Tab tidak aktif": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inactive tabs"
+          }
+        }
+      }
+    },
+    "Tab tidak digunakan selama 21 hari": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tabs unused for 21 days"
+          }
+        }
+      }
+    },
+    "Tab Samaran Anda akan ditampilkan di sini": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your Incognito tabs will appear here"
+          }
+        }
+      }
+    },
+    "Untuk browsing web secara rahasia, tambahkan tab baru.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To browse privately, add a new tab."
+          }
+        }
+      }
+    },
+    "Mode Incognito — riwayat, cookie, dan login tidak disimpan di tab ini.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Incognito mode — history, cookies, and logins are not saved in this tab."
+          }
+        }
+      }
+    },
+    "Kelola AdBlock & ekstensi…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manage AdBlock & extensions…"
+          }
+        }
+      }
+    },
+    "Impor file .js": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import .js file"
+          }
+        }
+      }
+    },
+    "Impor file .js…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import .js file…"
+          }
+        }
+      }
+    },
+    "Impor dari Safari / Chrome…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import from Safari / Chrome…"
+          }
+        }
+      }
+    },
+    "Tambah bookmark…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add bookmark…"
+          }
+        }
+      }
+    },
+    "Ubah bookmark": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit bookmark"
+          }
+        }
+      }
+    },
+    "Hapus favorit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete favorite"
+          }
+        }
+      }
+    },
+    "Favorit baru": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New favorite"
+          }
+        }
+      }
+    },
+    "Favorit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Favorites"
+          }
+        }
+      }
+    },
+    "Nama": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Name"
+          }
+        }
+      }
+    },
+    "Tambah ekstensi": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add extension"
+          }
+        }
+      }
+    },
+    "Tambah ekstensi…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add extension…"
+          }
+        }
+      }
+    },
+    "Ubah extension": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit extension"
+          }
+        }
+      }
+    },
+    "Jalankan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run"
+          }
+        }
+      }
+    },
+    "Perbarui kata sandi?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update password?"
+          }
+        }
+      }
+    },
+    "Isi otomatis memerlukan Face ID.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autofill requires Face ID."
+          }
+        }
+      }
+    },
+    "Geser tepi back/forward": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edge swipe back/forward"
+          }
+        }
+      }
+    },
+    "Tarik reload": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pull to reload"
+          }
+        }
+      }
+    },
+    "Pratinjau link": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Link preview"
+          }
+        }
+      }
+    },
+    "Deteksi alamat": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Detect addresses"
+          }
+        }
+      }
+    },
+    "Tombol DevTools": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "DevTools button"
+          }
+        }
+      }
+    },
+    "AdBlock & Ekstensi": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AdBlock & Extensions"
+          }
+        }
+      }
+    },
+    "AdBlock kustom": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custom AdBlock"
+          }
+        }
+      }
+    },
+    "Grup dibuat kosong — tambah tab dari menu tahan-lama di kartu tab, atau dari halaman grup.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group created empty — add tabs from the long-press menu on a tab card, or from the group page."
+          }
+        }
+      }
+    },
+    "Grup ini masih kosong. Tambah tab dari tombol di bawah.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This group is still empty. Add tabs with the button below."
+          }
+        }
+      }
+    },
+    "Grup tidak ditemukan.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Group not found."
+          }
+        }
+      }
+    },
+    "Userscript jalan di dalam browser ini saja, tidak bisa melihat aplikasi lain.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Userscripts run inside this browser only and cannot see other apps."
+          }
+        }
+      }
+    },
+    "Riwayat": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "History"
+          }
+        }
+      }
+    },
+    "Riwayat penjelajahan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Browsing history"
+          }
+        }
+      }
+    },
+    "Riwayat maju": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Forward history"
+          }
+        }
+      }
+    },
+    "Daftar Bacaan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading List"
+          }
+        }
+      }
+    },
+    "Mode Baca": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reader Mode"
+          }
+        }
+      }
+    },
+    "Lihat cookie": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View cookies"
+          }
+        }
+      }
+    },
+    "Konfigurasi situs": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Site configuration"
+          }
+        }
+      }
+    },
+    "Terjemahkan halaman": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Translate page"
+          }
+        }
+      }
+    },
+    "Peringatan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warning"
+          }
+        }
+      }
+    },
+    "Detail request": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Request detail"
+          }
+        }
+      }
+    },
+    "Ringkasan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Summary"
+          }
+        }
+      }
+    },
+    "Semua": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All"
+          }
+        }
+      }
+    },
+    "Info halaman": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Page info"
+          }
+        }
+      }
+    },
+    "Navigasi, fetch & XHR": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Navigation, fetch & XHR"
+          }
+        }
+      }
+    },
+    "Jalankan JavaScript…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run JavaScript…"
+          }
+        }
+      }
+    },
+    "Filter URL atau method": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Filter URL or method"
+          }
+        }
+      }
+    },
+    "Filter baris DOM…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Filter DOM rows…"
+          }
+        }
+      }
+    },
+    "Berhenti inspect": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop inspecting"
+          }
+        }
+      }
+    },
+    "Hapus cookie": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete cookie"
+          }
+        }
+      }
+    },
+    "Hapus local & session": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear local & session"
+          }
+        }
+      }
+    },
+    "Hapus log": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear log"
+          }
+        }
+      }
+    },
+    "Hapus semua data situs": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear all site data"
+          }
+        }
+      }
+    },
+    "Muat ulang DOM": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reload DOM"
+          }
+        }
+      }
+    },
+    "Muat ulang info halaman": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reload page info"
+          }
+        }
+      }
+    },
+    "Muat storage": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load storage"
+          }
+        }
+      }
+    },
+    "Muat cookie, localStorage, dan sessionStorage halaman ini.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load this page's cookies, localStorage, and sessionStorage."
+          }
+        }
+      }
+    },
+    "Muat resource timing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Load resource timing"
+          }
+        }
+      }
+    },
+    "Salin badan respons": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy response body"
+          }
+        }
+      }
+    },
+    "Salin HTML": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy HTML"
+          }
+        }
+      }
+    },
+    "Tidak ada cookie.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No cookies."
+          }
+        }
+      }
+    },
+    "Belum ada entri. Navigasi dan panggilan fetch/XHR halaman ini tercatat di sini.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No entries yet. This page's navigation and fetch/XHR calls are recorded here."
+          }
+        }
+      }
+    },
+    "(tidak ada header yang tertangkap)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(no headers captured)"
+          }
+        }
+      }
+    },
+    "(tidak ada header/body yang tertangkap)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(no headers/body captured)"
+          }
+        }
+      }
+    },
+    "(kosong)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(empty)"
+          }
+        }
+      }
+    },
+    "(badan respons kosong atau tidak tertangkap — mis. respons streaming, biner, atau opaque)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(empty response body or not captured — e.g. streaming, binary, or opaque responses)"
+          }
+        }
+      }
+    },
+    "Muse lewat web": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muse via web"
+          }
+        }
+      }
+    },
+    "Buka meta.ai": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open meta.ai"
+          }
+        }
+      }
+    },
+    "Hapus kunci": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete key"
+          }
+        }
+      }
+    },
+    "Simpan kunci": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save key"
+          }
+        }
+      }
+    },
+    "Salin prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy prompt"
+          }
+        }
+      }
+    },
+    "Tersimpan di Keychain": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved in Keychain"
+          }
+        }
+      }
+    },
+    "Disalin.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied."
+          }
+        }
+      }
+    },
+    "Teks halaman tidak terbaca.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Page text could not be read."
+          }
+        }
+      }
+    },
+    "Halaman ini": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This page"
+          }
+        }
+      }
+    },
+    "Minta AI": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ask AI"
+          }
+        }
+      }
+    },
+    "Pertanyaan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Question"
+          }
+        }
+      }
+    },
+    "Jawaban": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answer"
+          }
+        }
+      }
+    },
+    "Menjawab…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Answering…"
+          }
+        }
+      }
+    },
+    "Meminta jawaban…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Requesting an answer…"
+          }
+        }
+      }
+    },
+    "Cari": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search"
+          }
+        }
+      }
+    },
+    "Cadangan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Backups"
+          }
+        }
+      }
+    },
+    "Baru dihapus": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recently deleted"
+          }
+        }
+      }
+    },
+    "Hapus cadangan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete backup"
+          }
+        }
+      }
+    },
+    "Pulihkan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Restore"
+          }
+        }
+      }
+    },
+    "Timpa & Pulihkan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Overwrite & Restore"
+          }
+        }
+      }
+    },
+    "Salin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copy"
+          }
+        }
+      }
+    },
+    "Ekspor CSV": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Export CSV"
+          }
+        }
+      }
+    },
+    "Terapkan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apply"
+          }
+        }
+      }
+    },
+    "Sebelumnya": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous"
+          }
+        }
+      }
+    },
+    "Berikutnya": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next"
+          }
+        }
+      }
+    },
+    "Semua cadangan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All backups"
+          }
+        }
+      }
+    },
+    "Hasil pencarian": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search results"
+          }
+        }
+      }
+    },
+    "Tidak ada baris.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No rows."
+          }
+        }
+      }
+    },
+    "Tersimpan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved"
+          }
+        }
+      }
+    },
+    "Ukuran": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Size"
+          }
+        }
+      }
+    },
+    "Dibuat": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Created"
+          }
+        }
+      }
+    },
+    "Diubah": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Modified"
+          }
+        }
+      }
+    },
+    "Izin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Permissions"
+          }
+        }
+      }
+    },
+    "Pemilik": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Owner"
+          }
+        }
+      }
+    },
+    "Kunci": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Key"
+          }
+        }
+      }
+    },
+    "Kunci baru": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New key"
+          }
+        }
+      }
+    },
+    "Nilai": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Value"
+          }
+        }
+      }
+    },
+    "Tipe": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Type"
+          }
+        }
+      }
+    },
+    "Tabel & View": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tables & Views"
+          }
+        }
+      }
+    },
+    "Ke offset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To offset"
+          }
+        }
+      }
+    },
+    "Cari teks / hex (mis. DEADBEEF)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search text / hex (e.g. DEADBEEF)"
+          }
+        }
+      }
+    },
+    "Query SQL (berjalan di salinan)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SQL query (runs on a copy)"
+          }
+        }
+      }
+    },
+    "Menghitung…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Calculating…"
+          }
+        }
+      }
+    },
+    "Belum ada cadangan. File yang dihapus atau ditimpa akan dicadangkan dulu di sini.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No backups yet. Deleted or overwritten files are backed up here first."
+          }
+        }
+      }
+    },
+    "File asli masih ada. Timpa dengan cadangan ini?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The original file still exists. Overwrite with this backup?"
+          }
+        }
+      }
+    },
+    "Data mentah hanya bisa dibaca di sini; pakai Hex Viewer untuk mengubah byte-nya.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Raw data is read-only here; use the Hex Viewer to change bytes."
+          }
+        }
+      }
+    },
+    "Tambah item (String)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add item (String)"
+          }
+        }
+      }
+    },
+    "Simpan kembali ke file asli": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save back to original file"
+          }
+        }
+      }
+    },
+    "Buka sebagai Teks": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open as Text"
+          }
+        }
+      }
+    },
+    "Buka sebagai Hex": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open as Hex"
+          }
+        }
+      }
+    },
+    "Buka sebagai Plist": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open as Plist"
+          }
+        }
+      }
+    },
+    "Buka sebagai SQLite": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open as SQLite"
+          }
+        }
+      }
+    },
+    "Buat folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create folder"
+          }
+        }
+      }
+    },
+    "Folder baru": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New folder"
+          }
+        }
+      }
+    },
+    "Nama folder": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folder name"
+          }
+        }
+      }
+    },
+    "Nama baru": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New name"
+          }
+        }
+      }
+    },
+    "Ubah nama": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rename"
+          }
+        }
+      }
+    },
+    "Duplikat": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Duplicate"
+          }
+        }
+      }
+    },
+    "Pindahkan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move"
+          }
+        }
+      }
+    },
+    "Pindahkan…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move…"
+          }
+        }
+      }
+    },
+    "Ekstrak": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extract"
+          }
+        }
+      }
+    },
+    "Ekstrak di sini": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extract here"
+          }
+        }
+      }
+    },
+    "Ekstrak ZIP ini ke folder baru?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extract this ZIP to a new folder?"
+          }
+        }
+      }
+    },
+    "Kompres jadi ZIP": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Compress to ZIP"
+          }
+        }
+      }
+    },
+    "File terbesar": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Largest files"
+          }
+        }
+      }
+    },
+    "Folder kosong": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Empty folder"
+          }
+        }
+      }
+    },
+    "File hasil download dan file yang diimpor muncul di sini.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloaded and imported files appear here."
+          }
+        }
+      }
+    },
+    "Lokasi": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Location"
+          }
+        }
+      }
+    },
+    "Urutkan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sort"
+          }
+        }
+      }
+    },
+    "Z ke A / Terbaru dulu": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Z to A / Newest first"
+          }
+        }
+      }
+    },
+    "Cari di dalam folder…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search inside folder…"
+          }
+        }
+      }
+    },
+    "Hapus file ini? Salinannya dicadangkan dulu.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete this file? A copy is backed up first."
+          }
+        }
+      }
+    },
+    "Hapus semua": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete all"
+          }
+        }
+      }
+    },
+    "Jaringan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Network"
+          }
+        }
+      }
+    },
+    "Penyimpanan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Storage"
+          }
+        }
+      }
+    },
+    "Hapus Cache": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear Cache"
+          }
+        }
+      }
+    },
+    "Cache download": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Download cache"
+          }
+        }
+      }
+    },
+    "Browser — Umum": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Browser — General"
+          }
+        }
+      }
+    },
+    "Browser — Konten": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Browser — Content"
+          }
+        }
+      }
+    },
+    "Kata Sandi": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passwords"
+          }
+        }
+      }
+    },
+    "Kata Sandi tersimpan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved passwords"
+          }
+        }
+      }
+    },
+    "Putar di background (termasuk YouTube)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Play in background (including YouTube)"
+          }
+        }
+      }
+    },
+    "Tampilkan pratinjau link (tekan lama)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show link previews (long press)"
+          }
+        }
+      }
+    },
+    "Deteksi alamat (buka di Google Maps)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Detect addresses (open in Google Maps)"
+          }
+        }
+      }
+    },
+    "Web Inspector (periksa dari Safari di Mac)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Web Inspector (inspect from Safari on Mac)"
+          }
+        }
+      }
+    },
+    "Tampilkan tombol DevTools di browser": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show the DevTools button in the browser"
+          }
+        }
+      }
+    },
+    "Lewati timer tunggu (countdown download)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skip wait timers (download countdowns)"
+          }
+        }
+      }
+    },
+    "Tanpa redirect (klik download langsung ke link final)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No redirects (download clicks go straight to the final link)"
+          }
+        }
+      }
+    },
+    "Bagikan": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share"
+          }
+        }
+      }
+    },
+    "Impor file…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import file…"
+          }
+        }
+      }
+    },
+    "Impor sebagai userscript": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import as userscript"
+          }
+        }
+      }
+    },
+    "Add torrent": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add torrent"
+          }
+        }
+      }
+    },
+    "Background dan PiP butuh mode audio di sistem; mematikannya mengembalikan perilaku normal browser (media berhenti saat aplikasi ditutup).": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Background and PiP need the system audio mode; turning it off restores normal browser behavior (media stops when the app closes)."
+          }
+        }
+      }
+    },
+    "Kalau aktif, tombol DevTools melayang di atas halaman dan entri DevTools muncul di menu ⋯. Panelnya tampil sebagai sheet bawah gaya DevSnoop (Console, Network, Elements, Storage).": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When on, the DevTools button floats over the page and a DevTools entry appears in the ⋯ menu. The panel appears as a DevSnoop-style bottom sheet (Console, Network, Elements, Storage)."
+          }
+        }
+      }
+    },
+    "Blokir popup menahan jendela yang dibuka script (window.open); tautan yang diketuk tetap dibuka. Lewati timer mempercepat hitung mundur di halaman download sampai 50x dan mengaktifkan tombol download yang dikunci timer; timer yang ditegakkan server dan verifikasi manusia (mis. Cloudflare) tidak bisa dilewati. Tanpa redirect membuat klik tombol download langsung membuka link finalnya dan membuang popup ke situs lain; popup login/pembayaran yang sah bisa ikut tertahan, matikan kalau perlu.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Block popups holds back windows opened by scripts (window.open); tapped links still open. Skip timers speeds up countdowns on download pages up to 50x and enables timer-locked download buttons; server-enforced timers and human verification (e.g. Cloudflare) cannot be skipped. No-redirect makes download button clicks open the final link directly and drops popups to other sites; legitimate login/payment popups can get held back too, turn it off if needed."
+          }
+        }
+      }
+    },
+    "Username dan kata sandi yang disimpan dari formulir login di browser. Kata sandi hanya tersimpan di Keychain perangkat ini, dan melihat, menyalin, atau mengisinya selalu meminta Face ID (atau kode sandi perangkat).": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usernames and passwords saved from login forms in the browser. Passwords are stored only in this device's Keychain, and viewing, copying, or filling them always asks for Face ID (or the device passcode)."
+          }
+        }
+      }
+    },
+    "Menghapus sisa file sementara (.part dan potongan segmen) dari download yang sudah dihapus atau selesai. File .part milik download yang masih antre, jeda, atau gagal dipertahankan agar bisa dilanjutkan.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deletes leftover temporary files (.part and segment chunks) from deleted or finished downloads. .part files of queued, paused, or failed downloads are kept so they can be resumed."
+          }
+        }
+      }
+    },
+    "Filter kustom dan allowlist diatur di panel perisai di dalam browser. The in-app browser runs both AdBlock lists together and captures downloads straight into the queue.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Filter kustom dan allowlist diatur di panel perisai di dalam browser. Browser di aplikasi menjalankan kedua daftar AdBlock bersamaan dan menangkap unduhan langsung ke antrean."
+          }
+        }
+      }
+    },
+    "Kata sandi": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password"
+          }
+        }
+      }
+    },
+    "Situs": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Site"
+          }
+        }
+      }
+    },
+    "Situs (mis. google.com)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Site (e.g. google.com)"
+          }
+        }
+      }
+    },
+    "Nama pengguna": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Username"
+          }
+        }
+      }
+    },
+    "Ubah Login": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit Login"
+          }
+        }
+      }
+    },
+    "Tambah Login": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Add Login"
+          }
+        }
+      }
+    },
+    "Ubah…": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit…"
+          }
+        }
+      }
+    },
+    "Hapus login ini": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete this login"
+          }
+        }
+      }
+    },
+    "Hapus login ini?": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete this login?"
+          }
+        }
+      }
+    },
+    "Isi otomatis di halaman ini": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Autofill on this page"
+          }
+        }
+      }
+    },
+    "Meminta Face ID, lalu mengisi kolom login di halaman yang sedang dibuka.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Requests Face ID, then fills the login fields on the open page."
+          }
+        }
+      }
+    },
+    "Melihat dan menyalin kata sandi memerlukan Face ID (atau kode sandi perangkat).": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Viewing and copying the password requires Face ID (or the device passcode)."
+          }
+        }
+      }
+    },
+    "Tersalin ke clipboard.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Copied to clipboard."
+          }
+        }
+      }
+    },
+    "Cari situs atau nama pengguna": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search sites or usernames"
+          }
+        }
+      }
+    },
+    "Kata sandi baru (kosongkan = tidak berubah)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New password (leave empty = unchanged)"
+          }
+        }
+      }
+    },
+    "Kata sandi disimpan di Keychain perangkat ini. Saat mengubah login yang sudah ada, kosongkan kata sandi untuk mempertahankannya.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The password is stored in this device's Keychain. When editing an existing login, leave the password empty to keep it."
+          }
+        }
+      }
+    },
+    "Belum ada kata sandi tersimpan. Login di browser, dan saat formulir login dikirim, aplikasi akan menawarkan untuk menyimpannya.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No saved passwords yet. Log in in the browser, and when the login form is submitted, the app will offer to save it."
+          }
+        }
+      }
+    },
+    "Tidak ada login yang cocok dengan pencarian.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No logins match the search."
+          }
+        }
+      }
+    },
+    "Kata sandi hanya tersimpan di Keychain perangkat ini, tidak pernah dikirim ke mana pun. Melihat, menyalin, dan mengisi login selalu meminta Face ID (atau kode sandi perangkat). Login tidak disimpan dari tab Incognito.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Passwords are stored only in this device's Keychain and are never sent anywhere. Viewing, copying, and filling logins always require Face ID (or the device passcode). Logins are not saved from Incognito tabs."
+          }
+        }
+      }
+    },
+    "(tanpa nama pengguna)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(no username)"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

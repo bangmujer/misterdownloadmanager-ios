@@ -9,6 +9,11 @@ struct MDMApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
+                // The in-app Language choice drives SwiftUI localization:
+                // Text/Button/Section literals resolve through the string
+                // catalog for this locale, so picking Bahasa Indonesia
+                // translates the main UI without a restart.
+                .environment(\.locale, Locale(identifier: store.settings.language))
                 .preferredColorScheme(colorScheme(for: store.settings.themeName))
                 .tint(accent(for: store.settings.themeName))
                 .environment(\.mdmScale, store.settings.interfaceScale)

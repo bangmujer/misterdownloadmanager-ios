@@ -65,7 +65,7 @@ struct SettingsView: View {
                     Picker("Language", selection: $store.settings.language) {
                         Text("English").tag("en"); Text("Bahasa Indonesia").tag("id"); Text("العربية (RTL)").tag("ar"); Text("Français").tag("fr"); Text("Deutsch").tag("de"); Text("日本語").tag("ja")
                     }
-                    Text("Full 86-language catalogues from the desktop app are not ported; the UI strings in this build are English with Indonesian notes in key places. Language choice is stored and applied to new strings as they are translated.").font(.caption).foregroundStyle(.secondary)
+                    Text("The main UI follows the Language choice (Indonesian and English). Some deep or technical screens are still English; more strings are translated over time.").font(.caption).foregroundStyle(.secondary)
                     HStack { Text("Interface scale"); Slider(value: $store.settings.interfaceScale, in: 0.8...2.0, step: 0.1); Text("\(Int(store.settings.interfaceScale * 100))%") }
                 }
                 Section("Notifications & Clipboard") {
@@ -119,13 +119,14 @@ struct SettingsView: View {
                 }
                 Section("About & honest limits") {
                     Text("Mister Download Manager — iOS port. Original: github.com/anefzaoui/misterdownloadmanager, GPL-3.0, Rust/egui desktop app for Windows/Mac/Linux. This SwiftUI reimplementation keeps the download engine ideas (segmentation, resume, categories, queues, scheduler window, debrid, video grabber, torrent metadata, remote control) within iOS sandbox limits.")
-                    Text("Not ported: Chrome extensions and the desktop browser native-messaging host (the in-app browser captures downloads itself instead), system tray, wake/shutdown, yt-dlp/ffmpeg video processing, 7z/RAR via 7-Zip, MCP server, CLI switches, DHT/uTP/UPnP torrenting and background seeding, 86 languages, screen-reader-perfect desktop menus. Nothing here pretends those work.")
+                    Text("Not ported: Chrome extensions and the desktop browser native-messaging host (the in-app browser captures downloads itself instead), system tray, wake/shutdown, yt-dlp/ffmpeg video processing, 7z/RAR via 7-Zip, MCP server, CLI switches, DHT/uTP/UPnP torrenting and background seeding, screen-reader-perfect desktop menus. Nothing here pretends those work.")
                         .font(.caption).foregroundStyle(.secondary)
                     Link("Original repository", destination: URL(string: "https://github.com/anefzaoui/misterdownloadmanager")!)
                     Link("License: GPL-3.0", destination: URL(string: "https://www.gnu.org/licenses/gpl-3.0.html")!)
                 }
             }
             .navigationTitle("Options")
+            .onChange(of: store.settings.language) { _ in store.save() }
             .toolbar {
                 if showsDoneButton {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { store.save(); dismiss() } }
