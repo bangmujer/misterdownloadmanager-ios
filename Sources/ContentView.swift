@@ -35,29 +35,76 @@ struct ContentView: View {
                         Button("Batal", role: .cancel) {}
                     }
             }
-            .tabItem { Label("Downloads", systemImage: "arrow.down.circle") }
             .tag(AppTab.downloads)
 
             BrowserView(onExitToDownloads: { selectedTab = .downloads })
-                .tabItem { Label("Browser", systemImage: "globe") }
                 .tag(AppTab.browser)
 
             AIChatView()
-                .tabItem { Label("AI", systemImage: "sparkles") }
                 .tag(AppTab.ai)
 
             DownloadedFilesView()
-                .tabItem { Label("My Files", systemImage: "folder") }
                 .tag(AppTab.files)
 
             SettingsView(showsDoneButton: false)
-                .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppTab.settings)
         }
-        // No background fill on the tab bar: the page must show through
-        // to the bottom edge instead of a white band blocking it.
-        .toolbarBackground(.hidden, for: .tabBar)
+        // Custom Telegram-style bar: the system tab bar is hidden and
+        // replaced by a floating glass pill (Downloads, Browser, AI,
+        // My Files) plus a separate icon-only gear circle for Settings,
+        // like Telegram's detached search button — no label on it.
+        .toolbar(.hidden, for: .tabBar)
+        .safeAreaInset(edge: .bottom) { customTabBar }
         .overlay(alignment: .top) { clipboardBanner }
+
+    // MARK: - Telegram-style bottom bar
+
+    private var customTabBar: some View {
+        HStack(spacing: 12) {
+            HStack(spacing: 2) {
+                tabButton(.downloads, title: "Downloads", icon: "arrow.down.circle")
+                tabButton(.browser, title: "Browser", icon: "globe")
+                tabButton(.ai, title: "AI", icon: "sparkles")
+                tabButton(.files, title: "My Files", icon: "folder")
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: Capsule())
+            .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+
+            Button { selectedTab = .settings } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(selectedTab == .settings ? Color.accentColor : Color.primary)
+                    .frame(width: 56, height: 56)
+            }
+            .buttonStyle(.plain)
+            .background(.ultraThinMaterial, in: Circle())
+            .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+
+    private func tabButton(_ tab: AppTab, title: LocalizedStringKey, icon: String) -> some View {
+        Button { selectedTab = tab } label: {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 22, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.primary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(
+                Capsule().fill(selectedTab == tab ? Color.primary.opacity(0.09) : .clear)
+            )
+        }
+        .buttonStyle(.plain)
+    }
         .alert("Userscript diimpor", isPresented: Binding(get: { store.lastImportMessage != nil }, set: { if !$0 { store.lastImportMessage = nil } })) {
             Button("OK", role: .cancel) { store.lastImportMessage = nil }
         } message: {
