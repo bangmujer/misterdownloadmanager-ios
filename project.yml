@@ -49,6 +49,8 @@ targets:
         # appears at all) — it is what lets 10.128.4.218:5000 open.
         NSLocalNetworkUsageDescription: "Mister Download Manager memerlukan akses jaringan lokal untuk membuka server lokal di WiFi Anda, misalnya 10.128.4.218:5000."
         NSFaceIDUsageDescription: "Mister Download Manager memakai Face ID untuk menampilkan kata sandi tersimpan dan mengisi login di browser."
+        NSCameraUsageDescription: "Mister Download Manager memerlukan akses kamera untuk mengambil foto dari halaman web yang Anda buka, misalnya saat mengunggah foto di halaman inspeksi."
+        NSPhotoLibraryUsageDescription: "Mister Download Manager memerlukan akses galeri foto untuk memilih gambar dari halaman web yang Anda buka, misalnya saat mengunggah foto di halaman inspeksi."
         UIBackgroundModes:
           - audio
         UISupportedInterfaceOrientations:
@@ -75,7 +77,7 @@ targets:
       base:
         PRODUCT_NAME: "Mister Download Manager"
         PRODUCT_BUNDLE_IDENTIFIER: com.bangmujer.misterdownloadmanager
-        MARKETING_VERSION: "0.6.38"
+        MARKETING_VERSION: "0.6.39"
         # libsqlite3 is needed for `import SQLite3` (WQFiles-style SQLite viewer).
         OTHER_LDFLAGS: "$(inherited) -lsqlite3"
         CURRENT_PROJECT_VERSION: "1"
