@@ -1228,6 +1228,7 @@ final class BrowserSession: ObservableObject {
   var scheduled = false;
   var lastApply = 0;
   var hadBar = false;
+  var probe = null;
   function log(msg) { try { console.log('[MDM lift] ' + msg); } catch (e) {} }
   function describe(el) {
     var s = el.tagName ? el.tagName.toLowerCase() : '?';
@@ -1235,6 +1236,36 @@ final class BrowserSession: ObservableObject {
     var cn = el.className;
     if (typeof cn === 'string' && cn) s += '.' + cn.split(' ').join('.');
     return s;
+  }
+  // The page may be zoomed (per-site CSS zoom on <body> scales every
+  // rendered rect, while window.innerHeight stays in CSS px). A hidden
+  // 100px probe measures the effective zoom so all comparisons below
+  // happen in CSS px. If inline styles are blocked the probe stays a
+  // zero-height empty div and the fallback is 1.
+  function zoom() {
+    try {
+      if (!document.body) return 1;
+      if (!probe || !probe.isConnected) {
+        probe = document.createElement('div');
+        probe.id = '__mdmZoomProbe';
+        probe.style.position = 'fixed';
+        probe.style.left = '0';
+        probe.style.top = '0';
+        probe.style.width = '100px';
+        probe.style.height = '100px';
+        probe.style.visibility = 'hidden';
+        probe.style.pointerEvents = 'none';
+        probe.style.zIndex = '-1';
+        document.body.appendChild(probe);
+      }
+      var h = probe.getBoundingClientRect().height;
+      if (h > 0) return h / 100;
+    } catch (e) {}
+    return 1;
+  }
+  function cssRect(el, z) {
+    var r = el.getBoundingClientRect();
+    return { top: r.top / z, bottom: r.bottom / z, height: r.height / z, width: r.width / z };
   }
   function rectIsBar(r, vh, px, slack) {
     if (r.height <= 0 || r.height > vh * 0.45) return false;
@@ -1255,7 +1286,7 @@ final class BrowserSession: ObservableObject {
     }
     return false;
   }
-  function isShellBar(el) {
+  function isShellBar(el, z) {
     var cs = window.getComputedStyle(el);
     if (cs.position !== 'static' && cs.position !== 'relative') return false;
     var node = el;
@@ -1263,21 +1294,21 @@ final class BrowserSession: ObservableObject {
       var parent = node.parentElement;
       if (!parent) return false;
       if (!isLastVisibleChild(node, parent)) return false;
-      var pr = parent.getBoundingClientRect();
+      var pr = cssRect(parent, z);
       if (Math.abs(pr.height - window.innerHeight) <= 4 && Math.abs(pr.top) <= 4) return true;
       if (parent === document.documentElement) return false;
       node = parent;
     }
     return false;
   }
-  function isBottomBar(el, px, slack) {
+  function isBottomBar(el, px, slack, z) {
     if (!(el instanceof HTMLElement)) return false;
     var cs = window.getComputedStyle(el);
     if (cs.display === 'none' || cs.visibility === 'hidden') return false;
-    if (!rectIsBar(el.getBoundingClientRect(), window.innerHeight, px, slack)) return false;
+    if (!rectIsBar(cssRect(el, z), window.innerHeight, px, slack)) return false;
     var pos = cs.position;
     if (pos === 'fixed' || pos === 'sticky' || pos === 'absolute') return true;
-    return isShellBar(el);
+    return isShellBar(el, z);
   }
   function parentOf(el) {
     if (el.parentElement) return el.parentElement;
@@ -1306,11 +1337,11 @@ final class BrowserSession: ObservableObject {
     }
     return node;
   }
-  function barFromHit(el, px) {
+  function barFromHit(el, px, z) {
     var node = el;
     var found = null;
     while (node && node !== document.documentElement) {
-      if (node instanceof HTMLElement && isBottomBar(node, px, 70)) found = node;
+      if (node instanceof HTMLElement && isBottomBar(node, px, 70, z)) found = node;
       node = parentOf(node);
     }
     return found;
@@ -1341,15 +1372,20 @@ final class BrowserSession: ObservableObject {
   }
   function apply() {
     var px = window.__mdmChromeBottom || 0;
+    var z = zoom();
+    var vh = window.innerHeight;
+    // Keep connected, visible bars lifted without re-validating their
+    // rects: re-validation disagrees with the lifted position under
+    // zoom and flickers. Hidden/removed bars are restored.
     var kept = [];
     for (var i = 0; i < lifted.length; i++) {
       var prev = lifted[i];
-      if (prev.isConnected && isBottomBar(prev, px, 3)) { lift(prev, px); kept.push(prev); }
+      var pcs = window.getComputedStyle(prev);
+      if (prev.isConnected && pcs.display !== 'none' && pcs.visibility !== 'hidden') { lift(prev, px); kept.push(prev); }
       else { restore(prev); log('restore ' + describe(prev)); }
     }
     lifted = kept;
     var w = window.innerWidth;
-    var vh = window.innerHeight;
     var xs = [w * 0.1, w * 0.5, w * 0.9];
     var ys = [vh - 2, vh - 60];
     for (var a = 0; a < ys.length; a++) {
@@ -1357,8 +1393,8 @@ final class BrowserSession: ObservableObject {
         var hit = document.elementFromPoint(xs[k], ys[a]);
         if (!hit) continue;
         hit = deepestAtPoint(hit, xs[k], ys[a]);
-        var bar = barFromHit(hit, px);
-        if (bar && lifted.indexOf(bar) === -1) { lifted.push(bar); lift(bar, px); log('lift ' + describe(bar) + ' px=' + px); }
+        var bar = barFromHit(hit, px, z);
+        if (bar && lifted.indexOf(bar) === -1) { lifted.push(bar); lift(bar, px); log('lift ' + describe(bar) + ' px=' + px + ' z=' + z.toFixed(3)); }
       }
     }
     if (lifted.length === 0 && hadBar) log('no bar at bottom');
@@ -2377,9 +2413,8 @@ func resolveAddressInput(_ raw: String, engine: String) -> URL? {
 
 // MARK: - Browser UI (Safari-style floating navbar + Chrome-style overview)
 
-/// Reports the bottom chrome stack's height (find bar + DevTools row +
-/// save/autofill card + navbar) so the scroll inset and the bottom-bar
-/// lift can hug the real chrome instead of a magic number.
+/// Reports the navbar's height so the scroll inset and the
+/// bottom-bar lift can hug the real pill instead of a magic number.
 private struct ChromeStackHeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
@@ -2715,7 +2750,6 @@ struct BrowserView: View {
                 }
                 floatingNavBar
             }
-            .background(GeometryReader { proxy in Color.clear.preference(key: ChromeStackHeightKey.self, value: proxy.size.height) })
             // Lift the chrome above the tab bar by the real bottom
             // safe-area inset, so the searchbar stays above the tab bar
             // while the page still paints to the physical bottom edge.
@@ -3001,6 +3035,10 @@ struct BrowserView: View {
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
+        // Measure the navbar only (not the DevTools row or cards above
+        // it): the bottom-bar lift only has to clear the pill, and
+        // measuring the whole stack floated the page bar too high.
+        .background(GeometryReader { proxy in Color.clear.preference(key: ChromeStackHeightKey.self, value: proxy.size.height) })
     }
 
     /// Via-style site popup from the shield button: the site's title and
@@ -3075,9 +3113,9 @@ struct BrowserView: View {
         session.webViews[session.selectedID]?.configuration.websiteDataStore ?? WKWebsiteDataStore.default()
     }
 
-    /// Scroll/lift clearance: the real chrome stack height plus its
-    /// bottom padding and a small gap. Until the stack is measured,
-    /// fall back to the old magic number so the first frames are sane.
+    /// Scroll/lift clearance: the real navbar height plus its bottom
+    /// padding and a small gap. Until the navbar is measured, fall
+    /// back to the old magic number so the first frames are sane.
     /// Assigning bottomScrollInset re-pushes the lift via its didSet.
     private func refreshBottomInset() {
         let chrome = chromeStackHeight > 0 ? 6 + chromeStackHeight + 8 : 66
