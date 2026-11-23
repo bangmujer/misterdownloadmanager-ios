@@ -2713,7 +2713,7 @@ struct BrowserView: View {
             }
             session.applyRulesAndScripts(settings: store.browserSettings)
             session.applyMediaPlaybackSettings(store.browserSettings)
-            if let tab = session.selectedTab { addressDraft = tab.urlString }
+            if let tab = session.selectedTab { addressDraft = collapsedAddressText(for: tab.urlString) }
         }
         .onReceive(store.$browserSettings.dropFirst()) { settings in
             store.saveBrowserSettings()
@@ -2979,6 +2979,18 @@ struct BrowserView: View {
         session.webViews[session.selectedID]?.configuration.websiteDataStore ?? WKWebsiteDataStore.default()
     }
 
+    /// Collapsed address-pill text, Safari-style: just the host
+    /// ("m.youtube.com", "10.128.4.218:5000"), no scheme, path, query or
+    /// fragment. The full URL returns as soon as the field is tapped for
+    /// editing. Strings without a host (start page, about:blank) pass
+    /// through unchanged so the placeholder still shows.
+    private func collapsedAddressText(for urlString: String) -> String {
+        guard let url = URL(string: urlString), let host = url.host, !host.isEmpty else { return urlString }
+        guard let port = url.port else { return host }
+        let shownHost = host.contains(":") ? "[\(host)]" : host
+        return "\(shownHost):\(port)"
+    }
+
     private var addressPill: some View {
         HStack(spacing: 8) {
             Button { showingSiteInfo.toggle() } label: {
@@ -2987,7 +2999,9 @@ struct BrowserView: View {
             }
             TextField("Cari atau masukkan alamat", text: $addressDraft, onEditingChanged: { editing in
                 isEditingAddress = editing
-                if let tab = session.selectedTab { addressDraft = tab.urlString }
+                if let tab = session.selectedTab {
+                    addressDraft = editing ? tab.urlString : collapsedAddressText(for: tab.urlString)
+                }
             })
             .focused($addressFocused)
             .autocapitalization(.none).autocorrectionDisabled()
@@ -3030,7 +3044,7 @@ struct BrowserView: View {
         }
         .onChange(of: session.selectedTab?.urlString ?? "") { newValue in
             if !isEditingAddress {
-                addressDraft = newValue
+                addressDraft = collapsedAddressText(for: newValue)
             }
         }
     }
@@ -3040,7 +3054,7 @@ struct BrowserView: View {
         addressFocused = false
         isEditingAddress = false
         session.navigateSelected(to: url)
-        addressDraft = url.absoluteString
+        addressDraft = collapsedAddressText(for: url.absoluteString)
     }
 
     /// www-insensitive host-list match (www.contoh.com == contoh.com,
