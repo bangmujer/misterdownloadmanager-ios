@@ -676,6 +676,12 @@ final class BrowserSession: ObservableObject {
     var onLoginMessage: ((UUID, [String: Any]) -> Void)?
     @Published var pendingSavePrompt: SaveLoginPrompt?
     @Published var autofillOffer: AutofillOffer?
+    /// True after the user fills from, or dismisses, the autofill offer
+    /// for the current page: later `detected` reports (every focus into
+    /// a login field re-fires one) must not bring the suggestion back.
+    /// Reset on every committed navigation, so a genuinely new login
+    /// page can offer again.
+    var autofillSilenced: Bool = false
     var declinedSaveKeys: Set<String> = []
     @Published var consoleLogs: [UUID: [DevConsoleEntry]] = [:]
     @Published var networkLogs: [UUID: [DevNetworkEntry]] = [:]
@@ -2439,6 +2445,13 @@ struct BrowserWebView: UIViewRepresentable {
         // in WebKit's hands now and must not be re-issued.
         func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
             session.clearPending(for: tabID)
+            // A new document: the fill suggestion belongs to the old
+            // page. Drop it, and re-arm offers for the new page.
+            // (The save prompt is deliberately left alone: it is raised
+            // by the submitted login form and must survive the login
+            // navigation to be shown.)
+            session.autofillOffer = nil
+            session.autofillSilenced = false
             session.refreshCompatibility(for: webView)
         }
 
@@ -3129,6 +3142,7 @@ struct BrowserView: View {
                       let rawHost = body["host"] as? String, !rawHost.isEmpty else { return }
                 let host = PasswordStore.normalizeHost(rawHost)
                 if type == "detected" {
+                    guard !session.autofillSilenced else { return }
                     let matches = store.passwords.logins(forHost: host)
                     guard !matches.isEmpty else { return }
                     guard PasswordStore.hostMatches(page: PasswordStore.normalizeHost(session.selectedTab?.host ?? ""), saved: host) else { return }
@@ -3138,6 +3152,10 @@ struct BrowserView: View {
                 guard type == "submitted",
                       let username = body["username"] as? String,
                       let password = body["password"] as? String, !password.isEmpty else { return }
+                // The form was submitted: the fill suggestion has done
+                // its job (or the user typed by hand). Drop it so it
+                // never sits on top of the logged-in page.
+                session.autofillOffer = nil
                 let key = "\(host)\n\(username)\n\(password)"
                 guard !session.declinedSaveKeys.contains(key) else { return }
                 if let existing = store.passwords.logins.first(where: { PasswordStore.normalizeHost($0.host) == host && $0.username == username }),
@@ -3187,6 +3205,7 @@ struct BrowserView: View {
         .onChange(of: session.selectedID) { _ in
             session.pendingSavePrompt = nil
             session.autofillOffer = nil
+            session.autofillSilenced = false
             showingAutofillPicker = false
         }
         .onChange(of: geo.safeAreaInsets.bottom) { bottomSafeInset = $0; refreshBottomInset() }
@@ -3793,7 +3812,10 @@ struct BrowserView: View {
             Spacer()
             Button("Isi") { requestAutofill(offer) }
                 .buttonStyle(.borderedProminent)
-            Button { session.autofillOffer = nil } label: { Image(systemName: "xmark") }
+            Button {
+                session.autofillOffer = nil
+                session.autofillSilenced = true
+            } label: { Image(systemName: "xmark") }
                 .buttonStyle(.plain)
         }
         .padding(12)
@@ -3815,6 +3837,7 @@ struct BrowserView: View {
 
     private func fillLogin(_ login: SavedLogin) {
         session.autofillOffer = nil
+        session.autofillSilenced = true
         guard let password = store.passwords.password(for: login),
               let webView = session.webViews[session.selectedID] else { return }
         webView.evaluateJavaScript(PasswordStore.fillScript(username: login.username, password: password)) { result, _ in
