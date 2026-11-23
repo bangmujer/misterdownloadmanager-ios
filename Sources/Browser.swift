@@ -2566,6 +2566,49 @@ struct BrowserWebView: UIViewRepresentable {
             return nil
         }
 
+        // Media capture (getUserMedia): without this delegate method
+        // WebKit denies every camera/microphone request from a page.
+        // The system authorization prompt appears on first use; a
+        // denial at the system level denies the page request too.
+        func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+            guard type == .camera || type == .microphone || type == .cameraAndMicrophone else {
+                decisionHandler(.deny)
+                return
+            }
+            let needsCamera = (type == .camera || type == .cameraAndMicrophone)
+            let needsMic = (type == .microphone || type == .cameraAndMicrophone)
+            let decide: (Bool) -> Void = { granted in
+                DispatchQueue.main.async { decisionHandler(granted ? .grant : .deny) }
+            }
+            let cameraStatus = AVCaptureDevice.authorizationStatus(for: .video)
+            let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+            if (needsCamera && (cameraStatus == .denied || cameraStatus == .restricted))
+                || (needsMic && (micStatus == .denied || micStatus == .restricted)) {
+                decide(false)
+                return
+            }
+            if (!needsCamera || cameraStatus == .authorized) && (!needsMic || micStatus == .authorized) {
+                decide(true)
+                return
+            }
+            // Something is still undecided: ask the system once per
+            // device type, then decide from the resulting statuses.
+            let group = DispatchGroup()
+            if needsCamera && cameraStatus == .notDetermined {
+                group.enter()
+                AVCaptureDevice.requestAccess(for: .video) { _ in group.leave() }
+            }
+            if needsMic && micStatus == .notDetermined {
+                group.enter()
+                AVCaptureDevice.requestAccess(for: .audio) { _ in group.leave() }
+            }
+            group.notify(queue: .main) {
+                let camOK = !needsCamera || AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+                let micOK = !needsMic || AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+                decide(camOK && micOK)
+            }
+        }
+
         // Link long-press menu (Safari/Chrome parity): open, open in a
         // new (or private) tab, download the linked file, copy/share the
         // link, bookmark, reading list. Returning nil for non-link
