@@ -1214,31 +1214,57 @@ final class BrowserSession: ObservableObject {
       var lifted = [];
       var scheduled = false;
       var lastApply = 0;
-      function isBottomBar(el) {
-        if (!(el instanceof HTMLElement)) return false;
-        var cs = window.getComputedStyle(el);
-        if (cs.position !== 'fixed' && cs.position !== 'sticky') return false;
-        if (cs.display === 'none' || cs.visibility === 'hidden') return false;
-        var r = el.getBoundingClientRect();
-        var vh = window.innerHeight;
+      function rectIsBar(r, vh, px, slack) {
         if (r.height <= 0 || r.height > vh * 0.45) return false;
         if (r.width < 40) return false;
         if (r.top < vh * 0.5) return false;
-        if (Math.abs(r.bottom - vh) > 3) return false;
-        return true;
+        if (Math.abs(r.bottom - vh) <= slack) return true;
+        if (px > 0 && Math.abs(r.bottom - (vh - px)) <= slack) return true;
+        return false;
       }
-      function barFromHit(el) {
+      function isLastVisibleChild(node, parent) {
+        var kids = parent.children;
+        for (var i = kids.length - 1; i >= 0; i--) {
+          var k = kids[i];
+          var kcs = window.getComputedStyle(k);
+          if (kcs.display === 'none') continue;
+          if (k.getBoundingClientRect().height <= 0) continue;
+          return k === node;
+        }
+        return false;
+      }
+      function isShellBar(el) {
+        var cs = window.getComputedStyle(el);
+        if (cs.position !== 'static' && cs.position !== 'relative') return false;
         var node = el;
+        while (node) {
+          var parent = node.parentElement;
+          if (!parent) return false;
+          if (!isLastVisibleChild(node, parent)) return false;
+          var pr = parent.getBoundingClientRect();
+          if (Math.abs(pr.height - window.innerHeight) <= 4 && Math.abs(pr.top) <= 4) return true;
+          if (parent === document.documentElement) return false;
+          node = parent;
+        }
+        return false;
+      }
+      function isBottomBar(el, px, slack) {
+        if (!(el instanceof HTMLElement)) return false;
+        var cs = window.getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+        if (!rectIsBar(el.getBoundingClientRect(), window.innerHeight, px, slack)) return false;
+        var pos = cs.position;
+        if (pos === 'fixed' || pos === 'sticky' || pos === 'absolute') return true;
+        return isShellBar(el);
+      }
+      function barFromHit(el, px) {
+        var node = el;
+        var found = null;
         while (node && node !== document.documentElement) {
-          if (node instanceof HTMLElement) {
-            var cs = window.getComputedStyle(node);
-            if (cs.position === 'fixed' || cs.position === 'sticky') {
-              return isBottomBar(node) ? node : null;
-            }
-          }
+          if (node instanceof HTMLElement && isBottomBar(node, px, 70)) found = node;
           node = node.parentElement;
         }
-        return null;
+        return found;
       }
       function restore(el) {
         el.style.bottom = el.getAttribute(ORIG_BOTTOM) || '';
@@ -1255,8 +1281,9 @@ final class BrowserSession: ObservableObject {
         var origBottom = el.getAttribute(ORIG_BOTTOM) || '';
         var origTransform = el.getAttribute(ORIG_TRANSFORM) || '';
         if (px > 0) {
+          var before = el.getBoundingClientRect().bottom;
           el.style.bottom = px + 'px';
-          var moved = Math.abs(el.getBoundingClientRect().bottom - window.innerHeight) > 3;
+          var moved = (before - el.getBoundingClientRect().bottom) > 3;
           el.style.transform = moved ? origTransform : (origTransform + ' translateY(' + (-px) + 'px)');
         } else {
           el.style.bottom = origBottom;
@@ -1268,18 +1295,21 @@ final class BrowserSession: ObservableObject {
         var kept = [];
         for (var i = 0; i < lifted.length; i++) {
           var prev = lifted[i];
-          if (prev.isConnected && isBottomBar(prev)) { lift(prev, px); kept.push(prev); }
+          if (prev.isConnected && isBottomBar(prev, px, 3)) { lift(prev, px); kept.push(prev); }
           else restore(prev);
         }
         lifted = kept;
         var w = window.innerWidth;
         var vh = window.innerHeight;
         var xs = [w * 0.1, w * 0.5, w * 0.9];
-        for (var k = 0; k < xs.length; k++) {
-          var hit = document.elementFromPoint(xs[k], vh - 2);
-          if (!hit) continue;
-          var bar = barFromHit(hit);
-          if (bar && lifted.indexOf(bar) === -1) { lifted.push(bar); lift(bar, px); }
+        var ys = [vh - 2, vh - 60];
+        for (var a = 0; a < ys.length; a++) {
+          for (var k = 0; k < xs.length; k++) {
+            var hit = document.elementFromPoint(xs[k], ys[a]);
+            if (!hit) continue;
+            var bar = barFromHit(hit, px);
+            if (bar && lifted.indexOf(bar) === -1) { lifted.push(bar); lift(bar, px); }
+          }
         }
       }
       function schedule() {
