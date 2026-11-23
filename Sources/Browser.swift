@@ -649,6 +649,9 @@ final class BrowserSession: ObservableObject {
             webView.scrollView.contentInsetAdjustmentBehavior = .never
             webView.scrollView.contentInset = UIEdgeInsets(top: top, left: 0, bottom: bottomScrollInset, right: 0)
             webView.scrollView.verticalScrollIndicatorInsets = UIEdgeInsets(top: top, left: 0, bottom: bottomScrollInset, right: 0)
+            // Fixed/sticky bottom bars ignore the scroll inset, so push
+            // the same height to the lift script (bottomBarLiftScript).
+            pushBottomBarLift(to: webView)
         }
     }
     // History recording (set by the browser view; skipped for private tabs).
@@ -872,6 +875,15 @@ final class BrowserSession: ObservableObject {
         return 1.0
     }
 
+    /// Sends the current chrome height to the bottom-bar lift script, so
+    /// a site's own fixed/sticky bottom nav sits above the floating
+    /// address pill. Re-applied on every finished navigation (didFinish)
+    /// and whenever the inset changes (applyScrollInsets), since a new
+    /// document starts with no lift value.
+    func pushBottomBarLift(to webView: WKWebView) {
+        webView.evaluateJavaScript("window.__mdmSetChromeBottom && window.__mdmSetChromeBottom(\(bottomScrollInset))", completionHandler: nil)
+    }
+
     /// Applies the host's zoom with the CSS `zoom` property WebKit honours.
     /// Re-applied on every finished navigation (didFinish), since a new
     /// document starts at 100%. Clearing the property restores 100%.
@@ -1020,6 +1032,12 @@ final class BrowserSession: ObservableObject {
         ucc.addUserScript(WKUserScript(
             source: PasswordStore.detectionScript,
             injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true))
+        // Bottom-bar lift: always present so a site's own bottom nav is
+        // never hidden behind the floating address pill.
+        ucc.addUserScript(WKUserScript(
+            source: BrowserSession.bottomBarLiftScript,
+            injectionTime: .atDocumentStart,
             forMainFrameOnly: true))
         let compat = isCompatHost(webView.url?.host)
         if !compat {
@@ -1174,6 +1192,105 @@ final class BrowserSession: ObservableObject {
       try { document.hasFocus = function() { return true; }; } catch (e2) {}
       document.addEventListener('visibilitychange', function(e) { e.stopImmediatePropagation(); }, true);
       window.addEventListener('pagehide', function(e) { e.stopImmediatePropagation(); }, true);
+    })();
+    """
+
+    /// Lifts a site's own fixed/sticky bottom bar (its bottom nav) above
+    /// the floating browser chrome. Scroll padding alone cannot move
+    /// such bars: `position: fixed; bottom: 0` ignores the scroll view's
+    /// content inset, so on pages like the LAN inspection app the site
+    /// nav ended up behind the address pill. The script watches the DOM
+    /// (SPA view switches included) and shifts any bar pinned to the
+    /// viewport bottom up by the chrome height Swift sends via
+    /// `__mdmSetChromeBottom`. Bars sized by top+height ignore `bottom`,
+    /// so those get a translateY nudge instead, preserving any transform
+    /// they already had. Full-screen overlays and tall elements are
+    /// never touched.
+    static let bottomBarLiftScript = """
+    (function () {
+      var ORIG_BOTTOM = 'data-mdm-orig-bottom';
+      var ORIG_TRANSFORM = 'data-mdm-orig-transform';
+      var LIFT_PX = 'data-mdm-lift-px';
+      var lifted = [];
+      var scheduled = false;
+      var lastApply = 0;
+      function isBottomBar(el) {
+        if (!(el instanceof HTMLElement)) return false;
+        var cs = window.getComputedStyle(el);
+        if (cs.position !== 'fixed' && cs.position !== 'sticky') return false;
+        if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+        var r = el.getBoundingClientRect();
+        var vh = window.innerHeight;
+        if (r.height <= 0 || r.height > vh * 0.45) return false;
+        if (r.width < 40) return false;
+        if (r.top < vh * 0.5) return false;
+        if (Math.abs(r.bottom - vh) > 3) return false;
+        return true;
+      }
+      function restore(el) {
+        el.style.bottom = el.getAttribute(ORIG_BOTTOM) || '';
+        el.style.transform = el.getAttribute(ORIG_TRANSFORM) || '';
+        el.removeAttribute(LIFT_PX);
+        el.removeAttribute(ORIG_BOTTOM);
+        el.removeAttribute(ORIG_TRANSFORM);
+      }
+      function lift(el, px) {
+        if (!el.hasAttribute(ORIG_BOTTOM)) el.setAttribute(ORIG_BOTTOM, el.style.bottom || '');
+        if (!el.hasAttribute(ORIG_TRANSFORM)) el.setAttribute(ORIG_TRANSFORM, el.style.transform || '');
+        if (el.getAttribute(LIFT_PX) === String(px)) return;
+        el.setAttribute(LIFT_PX, String(px));
+        var origBottom = el.getAttribute(ORIG_BOTTOM) || '';
+        var origTransform = el.getAttribute(ORIG_TRANSFORM) || '';
+        if (px > 0) {
+          el.style.bottom = px + 'px';
+          var moved = Math.abs(el.getBoundingClientRect().bottom - window.innerHeight) > 3;
+          el.style.transform = moved ? origTransform : (origTransform + ' translateY(' + (-px) + 'px)');
+        } else {
+          el.style.bottom = origBottom;
+          el.style.transform = origTransform;
+        }
+      }
+      function apply() {
+        var px = window.__mdmChromeBottom || 0;
+        var root = document.body || document.documentElement;
+        if (!root) return;
+        var kept = [];
+        for (var i = 0; i < lifted.length; i++) {
+          var prev = lifted[i];
+          if (prev.isConnected && isBottomBar(prev)) { lift(prev, px); kept.push(prev); }
+          else restore(prev);
+        }
+        lifted = kept;
+        var all = root.querySelectorAll('*');
+        for (var j = 0; j < all.length; j++) {
+          var el = all[j];
+          if (!isBottomBar(el)) continue;
+          if (el.closest('[' + LIFT_PX + ']')) continue;
+          if (lifted.indexOf(el) === -1) lifted.push(el);
+          lift(el, px);
+        }
+      }
+      function schedule() {
+        if (scheduled) return;
+        scheduled = true;
+        var delay = Math.max(0, 350 - (Date.now() - lastApply));
+        setTimeout(function () { scheduled = false; lastApply = Date.now(); apply(); }, delay);
+      }
+      window.__mdmSetChromeBottom = function (px) {
+        window.__mdmChromeBottom = px;
+        schedule();
+      };
+      function watch() {
+        schedule();
+        if (window.MutationObserver) {
+          var mo = new MutationObserver(schedule);
+          mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+        }
+        window.addEventListener('resize', schedule);
+        window.addEventListener('orientationchange', schedule);
+      }
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
+      else watch();
     })();
     """
 
@@ -1805,6 +1922,10 @@ struct BrowserWebView: UIViewRepresentable {
             injectionTime: .atDocumentEnd,
             forMainFrameOnly: true))
         config.userContentController.addUserScript(WKUserScript(
+            source: BrowserSession.bottomBarLiftScript,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true))
+        config.userContentController.addUserScript(WKUserScript(
             source: DevToolsBridge.script,
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true))
@@ -1911,6 +2032,7 @@ struct BrowserWebView: UIViewRepresentable {
             session.clearPending(for: tabID)
             session.refreshCompatibility(for: webView)
             session.applyZoom(to: webView)
+            session.pushBottomBarLift(to: webView)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
