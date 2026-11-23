@@ -2818,7 +2818,6 @@ struct BrowserView: View {
                                 .font(.body.weight(.semibold))
                                 .frame(width: 44, height: 44)
                                 .background(.ultraThinMaterial, in: Circle())
-                                .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
                         }
                         .padding(.trailing, 4)
                     }
@@ -3264,7 +3263,6 @@ struct BrowserView: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
         .background(.ultraThinMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
         .contextMenu {
             if let tab = session.selectedTab, let url = URL(string: tab.urlString), url.scheme != nil {
                 Button { UIPasteboard.general.url = url } label: {
