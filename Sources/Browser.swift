@@ -5829,11 +5829,18 @@ struct NewExtensionView: View {
     @State private var name = ""
     @State private var source = ""
     @State private var atDocumentStart = false
+    @State private var selectAllToken = 0
     var body: some View {
         NavigationStack {
             Form {
                 TextField("Extension name", text: $name)
-                TextEditor(text: $source).frame(minHeight: 160)
+                CodeTextEditor(text: $source, selectAllToken: selectAllToken).frame(minHeight: 160)
+                HStack {
+                    Button("Pilih Semua") { selectAllToken += 1 }
+                    Spacer()
+                    Button("Hapus Semua", role: .destructive) { source = "" }
+                }
+                .font(.subheadline)
                 Picker("Jalankan", selection: $atDocumentStart) {
                     Text("Akhir dokumen").tag(false)
                     Text("Awal dokumen").tag(true)
@@ -5864,6 +5871,49 @@ struct NewExtensionView: View {
     }
 }
 
+/// Code editor backed by UITextView instead of SwiftUI's TextEditor:
+/// the standard edit menu (Potong, Salin, Ganti, Pilih Semua, ...) is
+/// fully available, and the sheet can select all / clear the text
+/// programmatically — SwiftUI's TextEditor exposes neither.
+struct CodeTextEditor: UIViewRepresentable {
+    @Binding var text: String
+    var selectAllToken: Int
+
+    func makeUIView(context: Context) -> UITextView {
+        let tv = UITextView()
+        tv.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        tv.isEditable = true
+        tv.isSelectable = true
+        tv.autocorrectionType = .no
+        tv.autocapitalizationType = .none
+        tv.spellCheckingType = .no
+        tv.smartQuotesType = .no
+        tv.smartDashesType = .no
+        tv.smartInsertDeleteType = .no
+        tv.backgroundColor = .clear
+        tv.delegate = context.coordinator
+        return tv
+    }
+
+    func updateUIView(_ tv: UITextView, context: Context) {
+        if tv.text != text { tv.text = text }
+        if context.coordinator.lastSelectAllToken != selectAllToken {
+            context.coordinator.lastSelectAllToken = selectAllToken
+            tv.becomeFirstResponder()
+            tv.selectedRange = NSRange(location: 0, length: (tv.text as NSString).length)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var text: Binding<String>
+        var lastSelectAllToken = 0
+        init(text: Binding<String>) { self.text = text }
+        func textViewDidChange(_ textView: UITextView) { text.wrappedValue = textView.text }
+    }
+}
+
 struct EditExtensionView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
@@ -5872,6 +5922,7 @@ struct EditExtensionView: View {
     @State private var source: String
     @State private var atDocumentStart: Bool
     @State private var showingDeleteConfirm = false
+    @State private var selectAllToken = 0
 
     init(ext: BrowserExtension) {
         extensionID = ext.id
@@ -5884,7 +5935,13 @@ struct EditExtensionView: View {
         NavigationStack {
             Form {
                 TextField("Extension name", text: $name)
-                TextEditor(text: $source).frame(minHeight: 160)
+                CodeTextEditor(text: $source, selectAllToken: selectAllToken).frame(minHeight: 160)
+                HStack {
+                    Button("Pilih Semua") { selectAllToken += 1 }
+                    Spacer()
+                    Button("Hapus Semua", role: .destructive) { source = "" }
+                }
+                .font(.subheadline)
                 Picker("Jalankan", selection: $atDocumentStart) {
                     Text("Akhir dokumen").tag(false)
                     Text("Awal dokumen").tag(true)
