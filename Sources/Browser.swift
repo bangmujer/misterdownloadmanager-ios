@@ -1224,6 +1224,7 @@ final class BrowserSession: ObservableObject {
   var ORIG_BOTTOM = 'data-mdm-orig-bottom';
   var ORIG_TRANSFORM = 'data-mdm-orig-transform';
   var LIFT_PX = 'data-mdm-lift-px';
+  var DEAD_PX = 'data-mdm-dead-px';
   var lifted = [];
   var scheduled = false;
   var lastApply = 0;
@@ -1350,25 +1351,55 @@ final class BrowserSession: ObservableObject {
     el.style.bottom = el.getAttribute(ORIG_BOTTOM) || '';
     el.style.transform = el.getAttribute(ORIG_TRANSFORM) || '';
     el.removeAttribute(LIFT_PX);
+    el.removeAttribute(DEAD_PX);
     el.removeAttribute(ORIG_BOTTOM);
     el.removeAttribute(ORIG_TRANSFORM);
   }
-  function lift(el, px) {
+  // Bottom of the bar's visible content: a bar container often carries
+  // empty space below its icons (e.g. an empty mini-player slot), and
+  // lifting the whole container by the full chrome height floats the
+  // icons far above the pill. The lift only needs to clear the pill
+  // for the visible content, so the empty tail is subtracted.
+  function visibleContentBottom(el, z) {
+    var maxBottom = -Infinity;
+    var all = el.querySelectorAll('*');
+    for (var i = 0; i < all.length; i++) {
+      var c = all[i];
+      var cs = window.getComputedStyle(c);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0') continue;
+      var r = cssRect(c, z);
+      if (r.height <= 0 || r.width <= 0) continue;
+      if (r.bottom > maxBottom) maxBottom = r.bottom;
+    }
+    return maxBottom;
+  }
+  function lift(el, px, z) {
     if (!el.hasAttribute(ORIG_BOTTOM)) el.setAttribute(ORIG_BOTTOM, el.style.bottom || '');
     if (!el.hasAttribute(ORIG_TRANSFORM)) el.setAttribute(ORIG_TRANSFORM, el.style.transform || '');
-    if (el.getAttribute(LIFT_PX) === String(px)) return;
-    el.setAttribute(LIFT_PX, String(px));
+    var dead = 0;
+    var cached = el.getAttribute(DEAD_PX);
+    if (cached !== null) dead = parseFloat(cached) || 0;
+    else {
+      var r0 = cssRect(el, z);
+      var cb = visibleContentBottom(el, z);
+      dead = (cb > -Infinity) ? Math.max(0, r0.bottom - cb) : 0;
+      el.setAttribute(DEAD_PX, String(dead));
+    }
+    var eff = Math.max(0, px + 8 - dead);
+    if (el.getAttribute(LIFT_PX) === String(eff)) return eff;
+    el.setAttribute(LIFT_PX, String(eff));
     var origBottom = el.getAttribute(ORIG_BOTTOM) || '';
     var origTransform = el.getAttribute(ORIG_TRANSFORM) || '';
-    if (px > 0) {
+    if (eff > 0) {
       var before = el.getBoundingClientRect().bottom;
-      el.style.bottom = px + 'px';
+      el.style.bottom = eff + 'px';
       var moved = (before - el.getBoundingClientRect().bottom) > 3;
-      el.style.transform = moved ? origTransform : (origTransform + ' translateY(' + (-px) + 'px)');
+      el.style.transform = moved ? origTransform : (origTransform + ' translateY(' + (-eff) + 'px)');
     } else {
       el.style.bottom = origBottom;
       el.style.transform = origTransform;
     }
+    return eff;
   }
   function apply() {
     var px = window.__mdmChromeBottom || 0;
@@ -1381,7 +1412,7 @@ final class BrowserSession: ObservableObject {
     for (var i = 0; i < lifted.length; i++) {
       var prev = lifted[i];
       var pcs = window.getComputedStyle(prev);
-      if (prev.isConnected && pcs.display !== 'none' && pcs.visibility !== 'hidden') { lift(prev, px); kept.push(prev); }
+      if (prev.isConnected && pcs.display !== 'none' && pcs.visibility !== 'hidden') { lift(prev, px, z); kept.push(prev); }
       else { restore(prev); log('restore ' + describe(prev)); }
     }
     lifted = kept;
@@ -1394,7 +1425,7 @@ final class BrowserSession: ObservableObject {
         if (!hit) continue;
         hit = deepestAtPoint(hit, xs[k], ys[a]);
         var bar = barFromHit(hit, px, z);
-        if (bar && lifted.indexOf(bar) === -1) { lifted.push(bar); lift(bar, px); log('lift ' + describe(bar) + ' px=' + px + ' z=' + z.toFixed(3)); }
+        if (bar && lifted.indexOf(bar) === -1) { lifted.push(bar); var eff = lift(bar, px, z); log('lift ' + describe(bar) + ' px=' + px + ' eff=' + eff + ' z=' + z.toFixed(3)); }
       }
     }
     if (lifted.length === 0 && hadBar) log('no bar at bottom');
