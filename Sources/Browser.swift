@@ -96,6 +96,11 @@ struct BrowserSettings: Codable {
     // agent are switched off, because they can break license/key
     // requests and player code. The page itself still runs in WKWebView.
     var drmCompatHosts: [String] = []
+    // Per-site zoom (Safari-style): clean host -> scale, 1.0 = 100%.
+    // Steps of 0.1 within 0.5...2.0; hosts without an entry use 100%.
+    // Persisted with the rest of the settings, so old saved JSON (without
+    // this key) still decodes via the default.
+    var siteZoom: [String: Double] = [:]
     // No-redirect mode: download clicks go straight to the final link,
     // cross-host popups are dropped.
     var noRedirects: Bool = true
@@ -632,6 +637,60 @@ final class BrowserSession: ObservableObject {
     func reload() { webViews[selectedID]?.reload() }
     func hardReload() { webViews[selectedID]?.reloadFromOrigin() }
     func stop() { webViews[selectedID]?.stopLoading() }
+
+    // MARK: Per-site zoom + print
+
+    /// Set before a zoom-only settings mutation so the settings-change
+    /// handler applies the zoom live instead of reloading the page.
+    var skipNextReload = false
+
+    /// Zoom scale for a host: exact clean-host entry wins, then the
+    /// www-insensitive / subdomain match used by the other per-site lists.
+    func zoomScale(for host: String) -> Double {
+        let clean = BrowserSession.cleanHostEntry(host)
+        if let exact = latestSettings.siteZoom[clean] { return exact }
+        func bare(_ s: String) -> String {
+            var h = BrowserSession.cleanHostEntry(s)
+            if h.hasPrefix("www.") { h = String(h.dropFirst(4)) }
+            return h
+        }
+        let h = bare(host)
+        for (key, scale) in latestSettings.siteZoom {
+            let b = bare(key)
+            if h == b || h.hasSuffix("." + b) { return scale }
+        }
+        return 1.0
+    }
+
+    /// Applies the host's zoom with the CSS `zoom` property WebKit honours.
+    /// Re-applied on every finished navigation (didFinish), since a new
+    /// document starts at 100%. Clearing the property restores 100%.
+    func applyZoom(to webView: WKWebView) {
+        guard let host = webView.url?.host, !host.isEmpty else { return }
+        let scale = zoomScale(for: host)
+        if scale == 1.0 {
+            webView.evaluateJavaScript("if(document.body){document.body.style.zoom='';}", completionHandler: nil)
+        } else {
+            webView.evaluateJavaScript("if(document.body){document.body.style.zoom='\(scale)';}", completionHandler: nil)
+        }
+    }
+
+    func applyZoomToCurrent() {
+        if let webView = webViews[selectedID] { applyZoom(to: webView) }
+    }
+
+    /// Prints the current page with the system print sheet (AirPrint /
+    /// Save as PDF). WKWebView's own print formatter paginates the page.
+    func printCurrentPage() {
+        guard let webView = webViews[selectedID] else { return }
+        let controller = UIPrintInteractionController.shared
+        controller.printFormatter = webView.viewPrintFormatter()
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            controller.present(from: webView.bounds, in: webView, animated: true, completionHandler: nil)
+        } else {
+            controller.present(animated: true, completionHandler: nil)
+        }
+    }
 
     // MARK: Groups
 
@@ -1610,6 +1669,7 @@ struct BrowserWebView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             session.clearPending(for: tabID)
             session.refreshCompatibility(for: webView)
+            session.applyZoom(to: webView)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
@@ -1955,6 +2015,11 @@ struct BrowserView: View {
         }
         .onReceive(store.$browserSettings.dropFirst()) { settings in
             store.saveBrowserSettings()
+            if session.skipNextReload {
+                session.skipNextReload = false
+                session.applyZoomToCurrent()
+                return
+            }
             session.applyRulesAndScripts(settings: settings)
             session.applyMediaPlaybackSettings(settings)
             session.reload()
@@ -2041,6 +2106,7 @@ struct BrowserView: View {
                     .frame(width: 44, height: 44)
                     .background(.ultraThinMaterial, in: Circle())
             }
+            .keyboardShortcut("[", modifiers: .command)
             .disabled(session.selectedTab?.canGoBack != true)
             .opacity(session.selectedTab?.canGoBack == true ? 1 : 0.4)
             .onLongPressGesture { showingBackHistory = true }
@@ -2066,6 +2132,20 @@ struct BrowserView: View {
                     if let exit = onExitToDownloads { exit() } else { dismiss() }
                 } label: { Label("Kembali ke Download", systemImage: "xmark.circle") }
                 Button { session.resetTab(session.selectedID) } label: { Label("Beranda", systemImage: "house") }
+                Button { session.newTab() } label: { Label("Tab Baru", systemImage: "plus") }
+                    .keyboardShortcut("t", modifiers: .command)
+                Button { session.reload() } label: { Label("Muat Ulang", systemImage: "arrow.clockwise") }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .disabled(session.selectedTab?.showsStartPage == true)
+                Button { session.hardReload() } label: { Label("Muat Ulang Penuh", systemImage: "arrow.clockwise.circle") }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(session.selectedTab?.showsStartPage == true)
+                Button {
+                    if let tab = session.selectedTab { addressDraft = tab.urlString }
+                    isEditingAddress = true
+                    addressFocused = true
+                } label: { Label("Fokus ke Alamat", systemImage: "magnifyingglass") }
+                    .keyboardShortcut("l", modifiers: .command)
                 if store.browserSettings.showDevToolsButton {
                     Button { showingDevTools = true } label: { Label("DevTools (F12)", systemImage: "chevron.left.forwardslash.chevron.right") }
                 }
@@ -2080,6 +2160,7 @@ struct BrowserView: View {
                         .disabled(session.selectedTab?.showsStartPage == true)
                 }
                 Button { showingFind = true } label: { Label("Cari di halaman", systemImage: "magnifyingglass") }
+                    .keyboardShortcut("f", modifiers: .command)
                     .disabled(session.selectedTab?.showsStartPage == true)
                 Button { addCurrentToReadingList() } label: { Label("Tambah ke Daftar Bacaan", systemImage: "text.badge.plus") }
                     .disabled(session.selectedTab?.showsStartPage == true)
@@ -2090,6 +2171,7 @@ struct BrowserView: View {
                 }
                 Divider()
                 Button { session.goForward() } label: { Label("Maju", systemImage: "chevron.right") }
+                    .keyboardShortcut("]", modifiers: .command)
                     .disabled(session.selectedTab?.canGoForward != true)
                 Button { showingForwardHistory = true } label: { Label("Riwayat maju…", systemImage: "list.bullet") }
                     .disabled(session.selectedTab?.canGoForward != true)
@@ -2098,6 +2180,7 @@ struct BrowserView: View {
                 }
                 Button { session.findMedia() } label: { Label("Cari video & media", systemImage: "play.rectangle.on.rectangle") }
                 Button { addCurrentToBookmarks() } label: { Label("Tambah ke favorit", systemImage: "star") }
+                    .keyboardShortcut("d", modifiers: .command)
                 if let host = session.selectedTab?.host, !host.isEmpty {
                     Button { toggleFreezeTimer(for: host) } label: {
                         Label(hostMatches(host, in: store.browserSettings.freezeTimerHosts) ? "Freeze timer di situs ini ✓" : "Freeze timer di situs ini", systemImage: "timer")
@@ -2110,11 +2193,26 @@ struct BrowserView: View {
                 Button { toggleDesktopMode() } label: {
                     Label(store.browserSettings.desktopMode ? "Mode desktop ✓" : "Mode desktop", systemImage: "desktopcomputer")
                 }
+                if let host = session.selectedTab?.host, !host.isEmpty, session.selectedTab?.showsStartPage != true {
+                    Button { adjustZoom(by: -0.1) } label: { Label("Perkecil tampilan", systemImage: "minus.magnifyingglass") }
+                        .keyboardShortcut("-", modifiers: .command)
+                    Button {} label: { Label("Zoom situs ini: \(Int(zoomScale(for: host) * 100))%", systemImage: "magnifyingglass") }
+                        .disabled(true)
+                    Button { adjustZoom(by: 0.1) } label: { Label("Perbesar tampilan", systemImage: "plus.magnifyingglass") }
+                        .keyboardShortcut("=", modifiers: .command)
+                    Button { resetZoom() } label: { Label("Reset zoom ke 100%", systemImage: "arrow.counterclockwise") }
+                        .keyboardShortcut("0", modifiers: .command)
+                        .disabled(zoomScale(for: host) == 1.0)
+                }
+                Button { session.printCurrentPage() } label: { Label("Cetak Halaman…", systemImage: "printer") }
+                    .keyboardShortcut("p", modifiers: .command)
+                    .disabled(session.selectedTab?.showsStartPage == true)
                 Button { showingAdBlock = true } label: { Label("AdBlock & ekstensi", systemImage: "shield") }
                 Divider()
                 Button(role: .destructive) {
                     if let id = session.selectedTab?.id { session.closeTab(id) }
                 } label: { Label("Tutup tab", systemImage: "xmark") }
+                    .keyboardShortcut("w", modifiers: .command)
             } label: {
                 Image(systemName: "ellipsis")
                     .font(.body.weight(.semibold))
@@ -2211,6 +2309,34 @@ struct BrowserView: View {
             let b = bare(e)
             return h == b || h.hasSuffix("." + b)
         }
+    }
+
+    /// Current zoom scale for a host (100% when the site has no entry).
+    private func zoomScale(for host: String) -> Double { session.zoomScale(for: host) }
+
+    /// Steps the site's zoom by `delta` (0.1 steps, 50%...200%) and applies
+    /// it live — no page reload, via the skipNextReload flag.
+    private func adjustZoom(by delta: Double) {
+        guard let host = session.selectedTab?.host, !host.isEmpty else { return }
+        let key = BrowserSession.cleanHostEntry(host)
+        let stepped = ((zoomScale(for: host) * 10).rounded() + delta * 10) / 10
+        let next = min(2.0, max(0.5, stepped))
+        session.skipNextReload = true
+        if next == 1.0 {
+            store.browserSettings.siteZoom.removeValue(forKey: key)
+        } else {
+            store.browserSettings.siteZoom[key] = next
+        }
+        store.saveBrowserSettings()
+        session.applyZoomToCurrent()
+    }
+
+    private func resetZoom() {
+        guard let host = session.selectedTab?.host, !host.isEmpty else { return }
+        session.skipNextReload = true
+        store.browserSettings.siteZoom.removeValue(forKey: BrowserSession.cleanHostEntry(host))
+        store.saveBrowserSettings()
+        session.applyZoomToCurrent()
     }
 
     /// Per-site freeze-timer toggle: adds/removes the current host.
