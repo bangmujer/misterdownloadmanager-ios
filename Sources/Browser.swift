@@ -2377,6 +2377,14 @@ func resolveAddressInput(_ raw: String, engine: String) -> URL? {
 
 // MARK: - Browser UI (Safari-style floating navbar + Chrome-style overview)
 
+/// Reports the bottom chrome stack's height (find bar + DevTools row +
+/// save/autofill card + navbar) so the scroll inset and the bottom-bar
+/// lift can hug the real chrome instead of a magic number.
+private struct ChromeStackHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct BrowserView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
@@ -2387,6 +2395,8 @@ struct BrowserView: View {
     @StateObject private var session = BrowserSession()
     @State private var addressDraft = ""
     @State private var isEditingAddress = false
+    @State private var chromeStackHeight: CGFloat = 0
+    @State private var bottomSafeInset: CGFloat = 0
     @State private var showingAdBlock = false
     @State private var showingSiteInfo = false
     @State private var showingCookies = false
@@ -2705,6 +2715,7 @@ struct BrowserView: View {
                 }
                 floatingNavBar
             }
+            .background(GeometryReader { proxy in Color.clear.preference(key: ChromeStackHeightKey.self, value: proxy.size.height) })
             // Lift the chrome above the tab bar by the real bottom
             // safe-area inset, so the searchbar stays above the tab bar
             // while the page still paints to the physical bottom edge.
@@ -2734,9 +2745,10 @@ struct BrowserView: View {
             }
         }
         .onAppear {
-            // Chrome height for scroll clearance: the same bottom inset
-            // the navbar is lifted by, plus its lift and height.
-            session.bottomScrollInset = geo.safeAreaInsets.bottom + 66
+            // Chrome clearance for scroll + bottom-bar lift, from the
+            // measured stack height (see refreshBottomInset).
+            bottomSafeInset = geo.safeAreaInsets.bottom
+            refreshBottomInset()
             session.onDownloadCaptured = { url in
                 let item = store.addItem(urlString: url.absoluteString)
                 capturedNotice = item == nil ? "Link captured, but the URL was rejected." : "Download added: \(item?.fileName ?? url.lastPathComponent)"
@@ -2819,7 +2831,8 @@ struct BrowserView: View {
             session.autofillOffer = nil
             showingAutofillPicker = false
         }
-        .onChange(of: geo.safeAreaInsets.bottom) { session.bottomScrollInset = $0 + 66 }
+        .onChange(of: geo.safeAreaInsets.bottom) { bottomSafeInset = $0; refreshBottomInset() }
+        .onPreferenceChange(ChromeStackHeightKey.self) { chromeStackHeight = $0; refreshBottomInset() }
         .onDisappear { session.saveTabs() }
         .sheet(isPresented: $showingAdBlock) {
             AdBlockPanelView()
@@ -3062,6 +3075,15 @@ struct BrowserView: View {
         session.webViews[session.selectedID]?.configuration.websiteDataStore ?? WKWebsiteDataStore.default()
     }
 
+    /// Scroll/lift clearance: the real chrome stack height plus its
+    /// bottom padding and a small gap. Until the stack is measured,
+    /// fall back to the old magic number so the first frames are sane.
+    /// Assigning bottomScrollInset re-pushes the lift via its didSet.
+    private func refreshBottomInset() {
+        let chrome = chromeStackHeight > 0 ? 6 + chromeStackHeight + 8 : 66
+        session.bottomScrollInset = bottomSafeInset + chrome
+    }
+
     /// Collapsed address-pill text, Safari-style: just the host
     /// ("m.youtube.com", "10.128.4.218:5000"), no scheme, path, query or
     /// fragment. The full URL returns as soon as the field is tapped for
@@ -3090,6 +3112,12 @@ struct BrowserView: View {
                 DispatchQueue.main.async {
                     if let tab = session.selectedTab {
                         addressDraft = editing ? tab.urlString : collapsedAddressText(for: tab.urlString)
+                    }
+                    if !editing {
+                        // The keyboard dismissal animates the safe area;
+                        // re-push the lift once it has settled so the
+                        // page bar drops back to the pill.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { session.applyScrollInsets() }
                     }
                 }
             })
