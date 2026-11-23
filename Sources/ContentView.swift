@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 /// Bottom tab bar (like the reference browser app): Downloads,
 /// Browser, My Files, Settings.
 enum AppTab: Hashable {
-    case downloads, browser, files, settings
+    case downloads, browser, music, files, settings
 }
 
 struct ContentView: View {
@@ -41,6 +41,10 @@ struct ContentView: View {
             BrowserView(onExitToDownloads: { selectedTab = .downloads })
                 .tabItem { Label("Browser", systemImage: "globe") }
                 .tag(AppTab.browser)
+
+            MusicView()
+                .tabItem { Label("Music", systemImage: "music.note") }
+                .tag(AppTab.music)
 
             DownloadedFilesView()
                 .tabItem { Label("My Files", systemImage: "folder") }

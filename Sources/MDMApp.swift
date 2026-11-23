@@ -3,12 +3,14 @@ import SwiftUI
 @main
 struct MDMApp: App {
     @StateObject private var store = DownloadStore()
+    @StateObject private var musicPlayer = MusicPlayer()
     @State private var remote = RemoteServer()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
+                .environmentObject(musicPlayer)
                 .preferredColorScheme(colorScheme(for: store.settings.themeName))
                 .tint(accent(for: store.settings.themeName))
                 .environment(\.mdmScale, store.settings.interfaceScale)
