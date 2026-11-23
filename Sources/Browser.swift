@@ -1368,16 +1368,30 @@ final class BrowserSession: ObservableObject {
     if (parts.length > 3) return parseFloat(parts[3]) || 0;
     return 1;
   }
-  // YouTube's pivot bar gets liquid-glass treatment (iOS 26 style
-  // floating tab bar) instead of a fully transparent background: a
-  // translucent tint plus backdrop blur, floating as a rounded pill.
-  // Other sites keep the transparent treatment.
+  // YouTube's pivot bar and Vidio's bottom bar get liquid-glass
+  // treatment (iOS 26 style floating tab bar) instead of a fully
+  // transparent background: a translucent tint plus backdrop blur,
+  // floating as a rounded pill. Other sites keep the transparent
+  // treatment. A bar that already blurs its own backdrop (YouTube's
+  // native glass, which the user approved as-is) is left untouched
+  // so its look is preserved exactly.
   function isGlassBar(el) {
     try {
       var host = window.location.hostname || '';
       if (host.indexOf('youtube.com') >= 0 || host.indexOf('youtu.be') >= 0) return true;
+      if (host.indexOf('vidio.com') >= 0) return true;
       var tag = (el.tagName || '').toLowerCase();
       if (tag.indexOf('pivot') >= 0) return true;
+    } catch (e) {}
+    return false;
+  }
+  function hasNativeGlass(el) {
+    try {
+      var cs = window.getComputedStyle(el);
+      var bf = cs.backdropFilter || '';
+      var wbf = cs.webkitBackdropFilter || '';
+      if (bf !== '' && bf !== 'none') return true;
+      if (wbf !== '' && wbf !== 'none') return true;
     } catch (e) {}
     return false;
   }
@@ -1388,7 +1402,25 @@ final class BrowserSession: ObservableObject {
     } catch (e) {}
     return false;
   }
-  function applyGlassBar(el) {
+  // Dark sites stay dark even in light system mode (Vidio's page is
+  // black): read the bar's own background luminance before painting
+  // over it. Returns true for dark, false for light, null for unknown
+  // (fully transparent background) so the caller falls back.
+  function barIsDark(cs) {
+    var c = cs.backgroundColor || '';
+    var i = c.indexOf('(');
+    var j = c.indexOf(')');
+    if (i < 0 || j < 0) return null;
+    var parts = c.substring(i + 1, j).split(',');
+    if (parts.length < 3) return null;
+    if (parts.length > 3 && (parseFloat(parts[3]) || 0) <= 0) return null;
+    var r = parseFloat(parts[0]) || 0;
+    var g = parseFloat(parts[1]) || 0;
+    var b = parseFloat(parts[2]) || 0;
+    var lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return lum < 128;
+  }
+  function applyGlassBar(el, dark) {
     if (el.hasAttribute(ORIG_GLASS)) return;
     el.setAttribute(ORIG_BG, el.style.background || '');
     el.setAttribute(ORIG_SHADOW, el.style.boxShadow || '');
@@ -1400,7 +1432,7 @@ final class BrowserSession: ObservableObject {
     el.setAttribute(ORIG_RIGHT, el.style.right || '');
     el.setAttribute(ORIG_WIDTH, el.style.width || '');
     el.setAttribute(ORIG_GLASS, '1');
-    el.style.background = isDarkPage() ? 'rgba(28,28,30,0.55)' : 'rgba(255,255,255,0.55)';
+    el.style.background = dark ? 'rgba(28,28,30,0.55)' : 'rgba(255,255,255,0.55)';
     el.style.backdropFilter = 'blur(22px) saturate(180%)';
     el.style.webkitBackdropFilter = 'blur(22px) saturate(180%)';
     el.style.boxShadow = '0 -0.5px 0 rgba(127,127,127,0.35), 0 10px 30px rgba(0,0,0,0.14)';
@@ -1419,8 +1451,12 @@ final class BrowserSession: ObservableObject {
   // element so restore() puts them back.
   function clearBarBackground(el, z) {
     if (el.hasAttribute(ORIG_BG)) return;
-    var glass = isGlassBar(el);
-    if (glass) applyGlassBar(el);
+    var cs0 = window.getComputedStyle(el);
+    var dark0 = barIsDark(cs0);
+    if (dark0 === null) dark0 = isDarkPage();
+    var glass = isGlassBar(el) && !hasNativeGlass(el);
+    if (glass) applyGlassBar(el, dark0);
+    else if (isGlassBar(el)) log('native glass kept ' + describe(el));
     var barRect = cssRect(el, z);
     var targets = [el];
     var all = el.querySelectorAll('*');
@@ -1444,23 +1480,46 @@ final class BrowserSession: ObservableObject {
     if (!glass) log('transparent bg ' + describe(el));
   }
   // iOS 26 style tab items: semibold labels (inherited into shadow
-  // content) and a glass pill behind the active item. The glyphs
-  // themselves live in YouTube's shadow DOM and cannot be redrawn
-  // from here, so the look comes from the pill, the weight and the
-  // glass bar. Re-applied every lift pass so tab switches restyle.
-  function stylePivotItems(el) {
-    if (!isGlassBar(el)) return;
+  // content) and a glass pill behind the active item. Only bars that
+  // received the glass treatment get it, so YouTube's approved look
+  // is untouched. Item tags vary per site (YouTube's renderer, a tab
+  // role, or plain row children with short labels), so fall back
+  // through all three. Re-applied every lift pass so tab switches
+  // restyle.
+  function pivotCandidates(el) {
     var items = el.querySelectorAll('ytm-pivot-bar-item-renderer');
-    if (items.length === 0) items = el.querySelectorAll('[role="tab"]');
+    if (items.length > 0) return items;
+    items = el.querySelectorAll('[role="tab"]');
+    if (items.length > 0) return items;
+    var pool = [];
+    var kids = el.children;
+    for (var i = 0; i < kids.length; i++) pool.push(kids[i]);
+    if (pool.length === 1 && pool[0].children.length > 1) {
+      pool = [];
+      var gc = kids[0].children;
+      for (var j = 0; j < gc.length; j++) pool.push(gc[j]);
+    }
+    var out = [];
+    for (var k = 0; k < pool.length; k++) {
+      var c = pool[k];
+      var r = c.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) continue;
+      var t = (c.textContent || '').split(' ').join('').trim();
+      if (t.length === 0 || t.length > 20) continue;
+      out.push(c);
+    }
+    return out;
+  }
+  function stylePivotItems(el) {
+    if (!el.hasAttribute(ORIG_GLASS)) return;
+    var list = Array.prototype.slice.call(pivotCandidates(el));
     var selfTag = (el.tagName || '').toLowerCase();
-    var list = [];
-    if (selfTag.indexOf('pivot-bar-item') >= 0) list.push(el);
-    for (var i = 0; i < items.length; i++) list.push(items[i]);
+    if (selfTag.indexOf('pivot-bar-item') >= 0 && list.indexOf(el) < 0) list.unshift(el);
     for (var k = 0; k < list.length; k++) {
       var it = list[k];
       var cn = it.className;
       var cls = (typeof cn === 'string') ? cn : '';
-      var active = it.hasAttribute('active') || it.getAttribute('aria-selected') === 'true' || cls.indexOf('active') >= 0 || cls.indexOf('selected') >= 0;
+      var active = it.hasAttribute('active') || it.getAttribute('aria-selected') === 'true' || it.getAttribute('aria-current') === 'true' || cls.indexOf('active') >= 0 || cls.indexOf('selected') >= 0;
       it.style.fontWeight = '600';
       it.style.borderRadius = '999px';
       it.style.background = active ? 'rgba(127,127,127,0.22)' : 'transparent';
