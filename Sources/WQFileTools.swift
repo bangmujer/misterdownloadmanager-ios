@@ -196,6 +196,24 @@ indirect enum WQPlistValue: Equatable {
     case array([WQPlistValue])
     case dict([(key: String, value: WQPlistValue)])
 
+    // Manual Equatable: the synthesized one fails because the dict case
+    // holds (key, value) tuples, which cannot conform to Equatable.
+    static func == (lhs: WQPlistValue, rhs: WQPlistValue) -> Bool {
+        switch (lhs, rhs) {
+        case (.string(let a), .string(let b)): return a == b
+        case (.int(let a), .int(let b)): return a == b
+        case (.double(let a), .double(let b)): return a == b
+        case (.bool(let a), .bool(let b)): return a == b
+        case (.date(let a), .date(let b)): return a == b
+        case (.data(let a), .data(let b)): return a == b
+        case (.array(let a), .array(let b)): return a == b
+        case (.dict(let a), .dict(let b)):
+            guard a.count == b.count else { return false }
+            return zip(a, b).allSatisfy { $0.key == $1.key && $0.value == $1.value }
+        default: return false
+        }
+    }
+
     var typeLabel: String {
         switch self {
         case .string: return "String"

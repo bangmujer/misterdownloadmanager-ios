@@ -2,6 +2,22 @@ import SwiftUI
 import UniformTypeIdentifiers
 import ZIPFoundation
 
+// iOS 16-compatible empty state (ContentUnavailableView needs iOS 17+).
+struct WQEmptyState: View {
+    let title: String
+    let systemImage: String
+    let subtitle: String
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: systemImage).font(.largeTitle).foregroundStyle(.secondary)
+            Text(title).font(.headline)
+            Text(subtitle).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+}
+
 // MARK: - Get Info (size, dates, owner, permissions, inode, SHA-256)
 
 struct WQGetInfoView: View {
@@ -9,11 +25,11 @@ struct WQGetInfoView: View {
     @State private var sha256: String?
     @State private var folderSize: Int64?
     @State private var computing = false
+    private var isDir: Bool { wqIsDirectory(url) }
     var body: some View {
         NavigationStack {
             List {
                 let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-                let isDir = wqIsDirectory(url)
                 LabeledContent("Nama", value: url.lastPathComponent)
                 LabeledContent("Lokasi", value: url.deletingLastPathComponent().path)
                 if isDir {
@@ -79,8 +95,8 @@ struct WQTextEditorView: View {
         NavigationStack {
             Group {
                 if tooLarge {
-                    ContentUnavailableView("File terlalu besar", systemImage: "doc.text",
-                        description: Text("File di atas 1 MB hanya bisa dibaca sebagian, seperti di WQFiles."))
+                    WQEmptyState(title: "File terlalu besar", systemImage: "doc.text",
+                        subtitle: "File di atas 1 MB hanya bisa dibaca sebagian, seperti di WQFiles.")
                 } else if editing {
                     TextEditor(text: $text).font(.system(.body, design: .monospaced)).padding(4)
                 } else {
@@ -165,8 +181,8 @@ struct WQPlistEditorView: View {
     var body: some View {
         NavigationStack {
             if loadFailed {
-                ContentUnavailableView("Plist tidak bisa dibaca", systemImage: "exclamationmark.triangle",
-                    description: Text("File ini bukan property list yang valid."))
+                WQEmptyState(title: "Plist tidak bisa dibaca", systemImage: "exclamationmark.triangle",
+                    subtitle: "File ini bukan property list yang valid.")
             } else {
                 WQPlistNodeView(value: $root, title: url.lastPathComponent)
             }
@@ -518,8 +534,8 @@ struct WQSQLiteViewerView: View {
         NavigationStack {
             Group {
                 if openFailed {
-                    ContentUnavailableView("Database tidak bisa dibuka", systemImage: "exclamationmark.triangle",
-                        description: Text("File ini bukan database SQLite yang valid."))
+                    WQEmptyState(title: "Database tidak bisa dibuka", systemImage: "exclamationmark.triangle",
+                        subtitle: "File ini bukan database SQLite yang valid.")
                 } else if let db {
                     List {
                         Section("Tabel & View") {
