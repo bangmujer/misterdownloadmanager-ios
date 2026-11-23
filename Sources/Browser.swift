@@ -1614,10 +1614,16 @@ final class BrowserSession: ObservableObject {
       el.setAttribute(DEAD_PX, String(dead));
     }
     var eff = Math.max(0, px + 8 - dead);
-    if (el.getAttribute(LIFT_PX) === String(eff)) return eff;
     el.setAttribute(LIFT_PX, String(eff));
     var origBottom = el.getAttribute(ORIG_BOTTOM) || '';
     var origTransform = el.getAttribute(ORIG_TRANSFORM) || '';
+    // No early return when eff is unchanged: the page itself moves its
+    // navbar while scrolling (hide-on-scroll transforms, style
+    // re-renders), overwriting our positioning. Returning early left
+    // the page's move in place, so after scrolling to the very bottom
+    // the bar ended up floating high above the pill. Re-asserting the
+    // position on every pass locks the bar above the pill no matter
+    // what the page does between passes.
     if (eff > 0) {
       var before = el.getBoundingClientRect().bottom;
       el.style.bottom = eff + 'px';
@@ -1678,6 +1684,12 @@ final class BrowserSession: ObservableObject {
     window.addEventListener('resize', schedule);
     window.addEventListener('orientationchange', schedule);
     window.addEventListener('scroll', schedule);
+    // The visual viewport shifts when scrolling settles at the ends
+    // and when the keyboard opens/closes; re-lock after those too.
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', schedule);
+      window.visualViewport.addEventListener('scroll', schedule);
+    }
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
   else watch();
