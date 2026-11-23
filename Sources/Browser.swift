@@ -2356,7 +2356,7 @@ struct BrowserView: View {
             }
             session.applyRulesAndScripts(settings: store.browserSettings)
             session.applyMediaPlaybackSettings(store.browserSettings)
-            if let tab = session.selectedTab { addressDraft = tab.host }
+            if let tab = session.selectedTab { addressDraft = tab.urlString }
         }
         .onReceive(store.$browserSettings.dropFirst()) { settings in
             store.saveBrowserSettings()
@@ -2496,8 +2496,7 @@ struct BrowserView: View {
             }
             TextField("Cari atau masukkan alamat", text: $addressDraft, onEditingChanged: { editing in
                 isEditingAddress = editing
-                if editing, let tab = session.selectedTab { addressDraft = tab.urlString }
-                if !editing, let tab = session.selectedTab { addressDraft = tab.host }
+                if let tab = session.selectedTab { addressDraft = tab.urlString }
             })
             .focused($addressFocused)
             .autocapitalization(.none).autocorrectionDisabled()
@@ -2538,7 +2537,7 @@ struct BrowserView: View {
         }
         .onChange(of: session.selectedTab?.urlString ?? "") { newValue in
             if !isEditingAddress {
-                addressDraft = URL(string: newValue)?.host ?? newValue
+                addressDraft = newValue
             }
         }
     }
@@ -2548,7 +2547,7 @@ struct BrowserView: View {
         addressFocused = false
         isEditingAddress = false
         session.navigateSelected(to: url)
-        addressDraft = url.host ?? url.absoluteString
+        addressDraft = url.absoluteString
     }
 
     /// www-insensitive host-list match (www.contoh.com == contoh.com,
