@@ -2392,7 +2392,11 @@ struct BrowserView: View {
             if phase != .active { session.saveTabs() }
         }
         .onDisappear { session.saveTabs() }
-        .sheet(isPresented: $showingAdBlock) { AdBlockPanelView() }
+        .sheet(isPresented: $showingAdBlock) {
+            AdBlockPanelView()
+                .presentationDetents([.height(240)])
+                .presentationDragIndicator(.hidden)
+        }
         .sheet(isPresented: $showingMedia) {
             NavigationStack {
                 List(foundMedia, id: \.self) { url in
@@ -4099,170 +4103,329 @@ private final class ScriptPickerPresenter: NSObject, UIDocumentPickerDelegate {
     }
 }
 
+/// Shield panel, redesigned Via-style: the same paged icon-grid bottom
+/// sheet as the ⋯ menu, grouped by function, one tap per setting.
+/// Anything needing text opens a small editor sheet; the long scrolling
+/// form is gone. Every change saves immediately.
 struct AdBlockPanelView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
-    @State private var blockText = ""
-    @State private var allowText = ""
+    @State private var page = 0
+    @State private var editor: PanelEditor?
+    @State private var showingExtensions = false
     @State private var showingNewExtension = false
     @State private var editingExtension: BrowserExtension?
     @State private var pickerPresenter = ScriptPickerPresenter()
     @State private var scriptImportResult: String?
-    @State private var exceptionText = ""
-    @State private var freezeText = ""
-    @State private var compatText = ""
+
+    private enum PanelEditor: Identifiable {
+        case block, allow, exceptions, freeze, compat, homePage, aiModel
+        var id: Self { self }
+    }
+
+    private struct PanelCell: Identifiable {
+        let id = UUID()
+        let title: String
+        let detail: String?
+        let systemImage: String
+        var isActive: Bool = false
+        let action: () -> Void
+    }
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section("AdBlock") {
-                    Toggle("Ghostery AdBlock (EasyList + EasyPrivacy)", isOn: $store.browserSettings.adBlockEnabled)
-                    Toggle("Custom AdBlock (your URL filters)", isOn: $store.browserSettings.customAdBlockEnabled)
-                    Text("Filter EasyList + EasyPrivacy — daftar yang dipakai mesin Ghostery — dikonversi ke format content-blocker Apple (snapshot 22 Nov 2026, diperbarui lewat update aplikasi). Daftar Ghostery dan filter kustom jalan bersamaan; allowlist di bawah mengalahkan keduanya.").font(.caption).foregroundStyle(.secondary)
-                    LabeledContent("Status", value: "Rules recompile when the browser reloads.")
-                }
-                Section("Custom block filters (one per line)") {
-                    TextEditor(text: Binding(
-                        get: { blockText },
-                        set: { newValue in
-                            blockText = newValue
-                            store.browserSettings.customBlockFilters = newValue.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                        }))
-                        .frame(minHeight: 90)
-                        .onAppear { blockText = store.browserSettings.customBlockFilters.joined(separator: "\n") }
-                    Text("Examples: ||ads.example.com · *.adnxs.com · *banner* · /regex/ — lines starting with ! or # are ignored.").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Allowlist (never blocked)") {
-                    TextEditor(text: Binding(
-                        get: { allowText },
-                        set: { newValue in
-                            allowText = newValue
-                            store.browserSettings.customAllowFilters = newValue.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-                        }))
-                        .frame(minHeight: 60)
-                        .onAppear { allowText = store.browserSettings.customAllowFilters.joined(separator: "\n") }
-                }
-                Section("Extensions (JavaScript userscripts)") {
-                    ForEach($store.browserSettings.extensions) { $ext in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Toggle(ext.name, isOn: $ext.enabled)
-                            if !ext.matches.isEmpty {
-                                Text("Hanya: " + ext.matches.joined(separator: ", "))
-                                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                            }
-                            HStack(spacing: 8) {
-                                Picker("Jalankan", selection: $ext.atDocumentStart) {
-                                    Text("Akhir dokumen").tag(false)
-                                    Text("Awal dokumen").tag(true)
-                                }
-                                .pickerStyle(.segmented)
-                                Button("Ubah") { editingExtension = $ext.wrappedValue }
-                                    .font(.subheadline)
-                            }
-                        }
-                        .padding(.vertical, 4)
+        VStack(spacing: 0) {
+            TabView(selection: $page) {
+                ForEach(pages.indices, id: \.self) { pageIndex in
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 5), spacing: 18) {
+                        ForEach(pages[pageIndex]) { panelCell($0) }
                     }
-                    .onDelete { store.browserSettings.extensions.remove(atOffsets: $0) }
-                    Button("Add extension…") { showingNewExtension = true }
-                    Button("Impor file .js…") { pickerPresenter.present { importScript(from: $0) } }
-                    if let scriptImportResult {
-                        Text(scriptImportResult).font(.caption).foregroundStyle(.secondary)
-                    }
-                    Text("iOS cannot run Chrome extensions — these are page scripts (userscripts) that run inside this browser only, the same approach Safari extensions use. They cannot see other apps or the system. Setiap script bisa dipilih jalannya di awal dokumen (sebelum halaman dimuat) atau akhir dokumen (sesudah halaman dimuat).").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Browser") {
-                    Picker("Search engine", selection: $store.browserSettings.searchEngine) {
-                        ForEach(SearchEngine.all, id: \.self) { engine in
-                            Text(engine).tag(engine)
-                        }
-                    }
-                    Picker("User Agent", selection: $store.browserSettings.userAgentPreset) {
-                        ForEach(UserAgentPreset.allCases) { preset in
-                            Text(preset.label).tag(preset.rawValue)
-                        }
-                    }
-                    TextField("Home page", text: $store.browserSettings.homePage)
-                        .autocapitalization(.none).autocorrectionDisabled()
-                }
-                Section("Media") {
-                    Toggle("Putar di background (termasuk YouTube)", isOn: $store.browserSettings.backgroundPlayback)
-                    Toggle("Picture in Picture", isOn: $store.browserSettings.pictureInPicture)
-                    Text("Background dan PiP butuh mode audio di sistem; mematikannya mengembalikan perilaku normal browser (media berhenti saat aplikasi ditutup). YouTube bisa mengubah pemutarnya sewaktu-waktu, jadi fitur ini mungkin perlu penyesuaian lagi.").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Konten") {
-                    Toggle("Blokir popup", isOn: $store.browserSettings.blockPopups)
-                    Toggle("Tampilkan pratinjau link (tekan lama)", isOn: $store.browserSettings.linkPreview)
-                    Toggle("Deteksi alamat (buka di Google Maps)", isOn: $store.browserSettings.detectAddresses)
-                    Toggle("Web Inspector (periksa dari Safari di Mac)", isOn: $store.browserSettings.webInspector)
-                    Toggle("Lewati timer tunggu (countdown download)", isOn: $store.browserSettings.skipTimers)
-                    Toggle("Tanpa redirect (klik download langsung ke link final)", isOn: $store.browserSettings.noRedirects)
-                    Text("Blokir popup menahan jendela yang dibuka script (window.open); tautan yang diketuk tetap dibuka. Deteksi alamat menandai alamat jalan di halaman menjadi tautan ke Google Maps untuk rute dan info lokal. Web Inspector memungkinkan Safari di Mac memeriksa halaman web ini. Lewati timer mempercepat hitung mundur di halaman download sampai 50x dan mengaktifkan tombol download yang dikunci timer; timer yang ditegakkan server dan verifikasi manusia (mis. Cloudflare) tidak bisa dilewati. Tanpa redirect membuat klik tombol download langsung membuka link finalnya dan membuang popup ke situs lain; popup login/pembayaran yang sah bisa ikut tertahan, matikan kalau perlu.").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Privasi (gaya Reynard/Firefox)") {
-                    Picker("Perlindungan pelacakan", selection: $store.browserSettings.trackingProtection) {
-                        Text("Mati").tag("off")
-                        Text("Standar").tag("standard")
-                        Text("Ketat").tag("strict")
-                    }
-                    Toggle("Hanya HTTPS (upgrade http ke https)", isOn: $store.browserSettings.httpsOnly)
-                    TextEditor(text: Binding(
-                        get: { exceptionText },
-                        set: { newValue in
-                            exceptionText = newValue
-                            store.browserSettings.siteExceptions = newValue.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
-                        }))
-                        .frame(minHeight: 60)
-                        .onAppear { exceptionText = store.browserSettings.siteExceptions.joined(separator: "\n") }
-                    Text("Situs yang dikecualikan (satu host per baris, mis. contoh.com) — perlindungan dan pemblokiran dimatikan untuk situs itu saja. Standar = daftar Ghostery (EasyList + EasyPrivacy) yang sudah aktif. Ketat = ditambah blokir tracker pihak ketiga. DNS over HTTPS tidak bisa dipaksakan dari dalam app ke WKWebView — DNS browser mengikuti pengaturan sistem iOS; kalau mau DoH, pakai profil DNS (mis. AdGuard) di Pengaturan iOS.").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Gestur") {
-                    Toggle("Geser tepi untuk back/forward", isOn: $store.browserSettings.gestureEdgeSwipe)
-                    Toggle("Tarik ke bawah untuk reload", isOn: $store.browserSettings.gesturePullRefresh)
-                    Toggle("Tekan lama tombol reload = hard reload", isOn: $store.browserSettings.gestureHardReload)
-                    Text("Setiap gestur bisa dimatikan sendiri-sendiri, seperti di Reynard. Hard reload memuat ulang halaman tanpa cache (reloadFromOrigin).").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Freeze timer (per situs)") {
-                    TextEditor(text: Binding(
-                        get: { freezeText },
-                        set: { newValue in
-                            freezeText = newValue
-                            store.browserSettings.freezeTimerHosts = newValue.components(separatedBy: .newlines).map { BrowserSession.cleanHostEntry($0) }.filter { !$0.isEmpty }
-                        }))
-                        .frame(minHeight: 60)
-                        .onAppear { freezeText = store.browserSettings.freezeTimerHosts.joined(separator: "\n") }
-                    Text("Satu host per baris (mis. contoh.com, subdomain ikut). Di situs yang terdaftar, timer halaman (setTimeout/setInterval) dibekukan total — hitung mundur dan timer trial berhenti, bukan dipercepat. Beda dengan \"Lewati timer\" yang mempercepat semua situs. Timer yang ditegakkan server tidak bisa dibekukan. Bisa juga diaktifkan cepat dari menu ⋯ di situs yang sedang dibuka.").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Mode kompatibilitas (situs DRM/video)") {
-                    TextEditor(text: Binding(
-                        get: { compatText },
-                        set: { newValue in
-                            compatText = newValue
-                            store.browserSettings.drmCompatHosts = newValue.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
-                        }))
-                        .frame(minHeight: 60)
-                        .onAppear { compatText = store.browserSettings.drmCompatHosts.joined(separator: "\n") }
-                    Text("Satu host per baris (mis. www.cubmu.com). Di situs yang terdaftar, AdBlock, userscript, dan user agent desktop dimatikan — halaman dimuat bersih seperti di Safari, karena pemblokir dan script bisa merusak permintaan lisensi DRM (FairPlay) dan kode player. Bisa juga diaktifkan cepat dari menu ⋯ di situs yang sedang dibuka. WKWebView sendiri mendukung FairPlay; kalau di Safari situsnya jalan tapi di sini tidak, mode ini yang pertama dicoba.").font(.caption).foregroundStyle(.secondary)
-                }
-                Section("Minta AI di browser") {
-                    Picker("AI", selection: $store.browserSettings.aiProvider) {
-                        ForEach(AIProvider.allCases) { provider in
-                            Text(provider.displayName).tag(provider.rawValue)
-                        }
-                    }
-                    TextField("Model", text: Binding(
-                        get: { store.browserSettings.aiModels[store.browserSettings.aiProvider] ?? "" },
-                        set: { newValue in
-                            store.browserSettings.aiModels[store.browserSettings.aiProvider] = newValue
-                            store.saveBrowserSettings()
-                        }))
-                        .autocapitalization(.none).autocorrectionDisabled()
-                    Text("API key dimasukkan di panel Minta AI dan disimpan di Keychain perangkat — tidak pernah tersimpan di file pengaturan. Muse tidak punya API publik, jadi pilihannya membuka meta.ai di tab baru.").font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .tag(pageIndex)
                 }
             }
-            .navigationTitle("Browser & AdBlock")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { store.saveBrowserSettings(); dismiss() } } }
+            .tabViewStyle(.page(indexDisplayMode: .always))
+            .frame(height: 184)
+            Button { dismiss() } label: {
+                Image(systemName: "chevron.down")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 30)
+            }
+            .padding(.bottom, 6)
+        }
+        .padding(.top, 14)
+        .onAppear { page = 0 }
+        .sheet(item: $editor) { PanelEditorSheet(editor: $0) }
+        .sheet(isPresented: $showingExtensions) { extensionsSheet }
+    }
+
+    private func panelCell(_ cell: PanelCell) -> some View {
+        Button(action: cell.action) {
+            VStack(spacing: 6) {
+                Image(systemName: cell.systemImage)
+                    .font(.title2)
+                    .frame(height: 30)
+                Text(cell.detail == nil ? cell.title : cell.title + "\n" + cell.detail!)
+                    .font(.caption2)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(cell.isActive ? .blue : .primary)
+    }
+
+    // MARK: - Pages, grouped by function (same grouping idea as the ⋯ menu)
+
+    private var pages: [[PanelCell]] { [protectionPage, extensionsPage, browserPage, contentPage] }
+
+    private var protectionPage: [PanelCell] {
+        let s = store.browserSettings
+        return [
+            PanelCell(title: "Pelacakan", detail: trackingLabel, systemImage: "shield", isActive: s.trackingProtection != "off") { cycleTrackingProtection() },
+            PanelCell(title: "Hanya HTTPS", detail: nil, systemImage: "lock", isActive: s.httpsOnly) { toggle(\.httpsOnly) },
+            PanelCell(title: "Pengecualian", detail: countDetail(s.siteExceptions.count, "situs"), systemImage: "shield.slash") { editor = .exceptions },
+            PanelCell(title: "AdBlock Ghostery", detail: nil, systemImage: "shield.fill", isActive: s.adBlockEnabled) { toggle(\.adBlockEnabled) },
+            PanelCell(title: "AdBlock kustom", detail: nil, systemImage: "shield.lefthalf.fill", isActive: s.customAdBlockEnabled) { toggle(\.customAdBlockEnabled) },
+            PanelCell(title: "Allowlist", detail: countDetail(s.customAllowFilters.count, "entri"), systemImage: "checkmark.shield") { editor = .allow },
+            PanelCell(title: "Filter kustom", detail: countDetail(s.customBlockFilters.count, "filter"), systemImage: "list.bullet.rectangle") { editor = .block },
+        ]
+    }
+
+    private var extensionsPage: [PanelCell] {
+        let s = store.browserSettings
+        let active = s.extensions.filter(\.enabled).count
+        return [
+            PanelCell(title: "Ekstensi", detail: s.extensions.isEmpty ? "Tidak ada" : "\(s.extensions.count) script, \(active) aktif", systemImage: "puzzlepiece.extension") { showingExtensions = true },
+            PanelCell(title: "Tambah ekstensi", detail: nil, systemImage: "plus") { showingExtensions = true; showingNewExtension = true },
+            PanelCell(title: "Impor file .js", detail: nil, systemImage: "square.and.arrow.down") { pickerPresenter.present { importScript(from: $0) } },
+            PanelCell(title: "Minta AI", detail: s.aiProvider, systemImage: "sparkles") { cycleAIProvider() },
+            PanelCell(title: "Model AI", detail: aiModelLabel, systemImage: "cpu") { editor = .aiModel },
+        ]
+    }
+
+    private var browserPage: [PanelCell] {
+        let s = store.browserSettings
+        return [
+            PanelCell(title: "Mesin cari", detail: s.searchEngine, systemImage: "magnifyingglass") { cycleSearchEngine() },
+            PanelCell(title: "User Agent", detail: uaShortLabel, systemImage: "globe") { cycleUserAgent() },
+            PanelCell(title: "Beranda", detail: homeHostLabel, systemImage: "house") { editor = .homePage },
+            PanelCell(title: "Background playback", detail: nil, systemImage: "play.circle", isActive: s.backgroundPlayback) { toggle(\.backgroundPlayback) },
+            PanelCell(title: "Picture in Picture", detail: nil, systemImage: "rectangle.on.rectangle", isActive: s.pictureInPicture) { toggle(\.pictureInPicture) },
+            PanelCell(title: "Tombol DevTools", detail: nil, systemImage: "chevron.left.forwardslash.chevron.right", isActive: s.showDevToolsButton) { toggle(\.showDevToolsButton) },
+            PanelCell(title: "Geser tepi back/forward", detail: nil, systemImage: "arrow.left.arrow.right", isActive: s.gestureEdgeSwipe) { toggle(\.gestureEdgeSwipe) },
+            PanelCell(title: "Tarik reload", detail: nil, systemImage: "arrow.down", isActive: s.gesturePullRefresh) { toggle(\.gesturePullRefresh) },
+            PanelCell(title: "Hard reload", detail: nil, systemImage: "arrow.clockwise", isActive: s.gestureHardReload) { toggle(\.gestureHardReload) },
+        ]
+    }
+
+    private var contentPage: [PanelCell] {
+        let s = store.browserSettings
+        return [
+            PanelCell(title: "Blokir popup", detail: nil, systemImage: "nosign", isActive: s.blockPopups) { toggle(\.blockPopups) },
+            PanelCell(title: "Pratinjau link", detail: nil, systemImage: "eye", isActive: s.linkPreview) { toggle(\.linkPreview) },
+            PanelCell(title: "Deteksi alamat", detail: nil, systemImage: "map", isActive: s.detectAddresses) { toggle(\.detectAddresses) },
+            PanelCell(title: "Web Inspector", detail: nil, systemImage: "wrench.and.screwdriver", isActive: s.webInspector) { toggle(\.webInspector) },
+            PanelCell(title: "Lewati timer", detail: nil, systemImage: "timer", isActive: s.skipTimers) { toggle(\.skipTimers) },
+            PanelCell(title: "Tanpa redirect", detail: nil, systemImage: "arrow.forward", isActive: s.noRedirects) { toggle(\.noRedirects) },
+            PanelCell(title: "Freeze timer", detail: countDetail(s.freezeTimerHosts.count, "situs"), systemImage: "snowflake") { editor = .freeze },
+            PanelCell(title: "Mode kompatibilitas", detail: countDetail(s.drmCompatHosts.count, "situs"), systemImage: "checkmark.seal") { editor = .compat },
+        ]
+    }
+
+    // MARK: - Helpers
+
+    private func toggle(_ keyPath: WritableKeyPath<BrowserSettings, Bool>) {
+        store.browserSettings[keyPath: keyPath].toggle()
+        store.saveBrowserSettings()
+    }
+
+    private func countDetail(_ count: Int, _ noun: String) -> String? {
+        count > 0 ? "\(count) \(noun)" : nil
+    }
+
+    private var trackingLabel: String {
+        switch store.browserSettings.trackingProtection {
+        case "off": return "Mati"
+        case "strict": return "Ketat"
+        default: return "Standar"
+        }
+    }
+
+    private func cycleTrackingProtection() {
+        let order = ["off", "standard", "strict"]
+        let current = order.firstIndex(of: store.browserSettings.trackingProtection) ?? 1
+        store.browserSettings.trackingProtection = order[(current + 1) % order.count]
+        store.saveBrowserSettings()
+    }
+
+    private func cycleSearchEngine() {
+        let all = SearchEngine.all
+        let current = all.firstIndex(of: store.browserSettings.searchEngine) ?? 0
+        store.browserSettings.searchEngine = all[(current + 1) % all.count]
+        store.saveBrowserSettings()
+    }
+
+    private var uaShortLabel: String {
+        switch UserAgentPreset(rawValue: store.browserSettings.userAgentPreset) {
+        case .iphone: return "Safari iPhone"
+        case .ipad: return "Safari iPad"
+        case .mac: return "Safari Mac"
+        case .chromeWindows: return "Chrome Windows"
+        case .chromeAndroid: return "Chrome Android"
+        case .firefoxWindows: return "Firefox Windows"
+        default: return "Default"
+        }
+    }
+
+    private func cycleUserAgent() {
+        let all = UserAgentPreset.allCases
+        let current = all.firstIndex(where: { $0.rawValue == store.browserSettings.userAgentPreset }) ?? 0
+        store.browserSettings.userAgentPreset = all[(current + 1) % all.count].rawValue
+        store.saveBrowserSettings()
+    }
+
+    private func cycleAIProvider() {
+        let all = AIProvider.allCases
+        let current = all.firstIndex(where: { $0.rawValue == store.browserSettings.aiProvider }) ?? 0
+        store.browserSettings.aiProvider = all[(current + 1) % all.count].rawValue
+        store.saveBrowserSettings()
+    }
+
+    private var aiModelLabel: String {
+        let model = store.browserSettings.aiModels[store.browserSettings.aiProvider] ?? ""
+        return model.isEmpty ? "Default" : model
+    }
+
+    private var homeHostLabel: String {
+        URL(string: store.browserSettings.homePage)?.host ?? store.browserSettings.homePage
+    }
+
+    // MARK: - Extensions editor (same list as the old panel, in its own sheet)
+
+    private var extensionsSheet: some View {
+        NavigationStack {
+            Form {
+                ForEach($store.browserSettings.extensions) { $ext in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle(ext.name, isOn: $ext.enabled)
+                        if !ext.matches.isEmpty {
+                            Text("Hanya: " + ext.matches.joined(separator: ", "))
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                        HStack(spacing: 8) {
+                            Picker("Jalankan", selection: $ext.atDocumentStart) {
+                                Text("Akhir dokumen").tag(false)
+                                Text("Awal dokumen").tag(true)
+                            }
+                            .pickerStyle(.segmented)
+                            Button("Ubah") { editingExtension = $ext.wrappedValue }
+                                .font(.subheadline)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .onDelete { store.browserSettings.extensions.remove(atOffsets: $0); store.saveBrowserSettings() }
+                Button("Tambah ekstensi…") { showingNewExtension = true }
+                Button("Impor file .js…") { pickerPresenter.present { importScript(from: $0) } }
+                if let scriptImportResult {
+                    Text(scriptImportResult).font(.caption).foregroundStyle(.secondary)
+                }
+                Text("Userscript jalan di dalam browser ini saja, tidak bisa melihat aplikasi lain.").font(.caption).foregroundStyle(.secondary)
+            }
+            .navigationTitle("Ekstensi")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Selesai") { store.saveBrowserSettings(); dismiss() } } }
             .sheet(isPresented: $showingNewExtension) { NewExtensionView() }
             .sheet(item: $editingExtension) { ext in EditExtensionView(ext: ext) }
+        }
+    }
+
+    // MARK: - One small editor sheet for every list / text setting
+
+    private struct PanelEditorSheet: View {
+        @EnvironmentObject var store: DownloadStore
+        @Environment(\.dismiss) var dismiss
+        let editor: PanelEditor
+        @State private var text = ""
+
+        var body: some View {
+            NavigationStack {
+                Form {
+                    if editor == .homePage || editor == .aiModel {
+                        TextField(editor == .homePage ? "Alamat beranda" : "Model", text: $text)
+                            .autocapitalization(.none).autocorrectionDisabled()
+                    } else {
+                        TextEditor(text: $text).frame(minHeight: 120)
+                    }
+                    Text(hint).font(.caption).foregroundStyle(.secondary)
+                }
+                .navigationTitle(title)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Batal") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) { Button("Simpan") { save(); dismiss() } }
+                }
+                .onAppear { text = initialText }
+            }
+        }
+
+        private var title: String {
+            switch editor {
+            case .block: return "Filter kustom"
+            case .allow: return "Allowlist"
+            case .exceptions: return "Pengecualian situs"
+            case .freeze: return "Freeze timer"
+            case .compat: return "Mode kompatibilitas"
+            case .homePage: return "Beranda"
+            case .aiModel: return "Model AI"
+            }
+        }
+
+        private var hint: String {
+            switch editor {
+            case .block: return "Satu filter per baris: ||ads.example.com · *.adnxs.com · *banner* · /regex/ — baris ! / # diabaikan."
+            case .allow: return "Satu per baris — tidak pernah diblokir, mengalahkan AdBlock."
+            case .exceptions: return "Satu host per baris — perlindungan dimatikan untuk situs itu saja."
+            case .freeze: return "Satu host per baris — timer halaman dibekukan total di situs itu."
+            case .compat: return "Satu host per baris — AdBlock, userscript & UA desktop dimatikan di situs itu."
+            case .homePage: return "Alamat halaman beranda."
+            case .aiModel: return "Model untuk provider AI yang sedang dipilih. API key disimpan di Keychain, bukan di sini."
+            }
+        }
+
+        private var initialText: String {
+            let s = store.browserSettings
+            switch editor {
+            case .block: return s.customBlockFilters.joined(separator: "\n")
+            case .allow: return s.customAllowFilters.joined(separator: "\n")
+            case .exceptions: return s.siteExceptions.joined(separator: "\n")
+            case .freeze: return s.freezeTimerHosts.joined(separator: "\n")
+            case .compat: return s.drmCompatHosts.joined(separator: "\n")
+            case .homePage: return s.homePage
+            case .aiModel: return s.aiModels[s.aiProvider] ?? ""
+            }
+        }
+
+        private func save() {
+            let lines = text.components(separatedBy: .newlines)
+            switch editor {
+            case .block:
+                store.browserSettings.customBlockFilters = lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            case .allow:
+                store.browserSettings.customAllowFilters = lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            case .exceptions:
+                store.browserSettings.siteExceptions = lines.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+            case .freeze:
+                store.browserSettings.freezeTimerHosts = lines.map { BrowserSession.cleanHostEntry($0) }.filter { !$0.isEmpty }
+            case .compat:
+                store.browserSettings.drmCompatHosts = lines.map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+            case .homePage:
+                store.browserSettings.homePage = text
+            case .aiModel:
+                store.browserSettings.aiModels[store.browserSettings.aiProvider] = text
+            }
+            store.saveBrowserSettings()
         }
     }
 
