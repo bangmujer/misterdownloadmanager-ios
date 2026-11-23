@@ -2292,7 +2292,7 @@ struct BrowserView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            Color(.systemBackground).ignoresSafeArea()
+            Color.clear.ignoresSafeArea()
             ZStack {
                 if let tab = session.selectedTab {
                     BrowserWebView(session: session, tabID: tab.id, settings: store.browserSettings)
@@ -2323,6 +2323,9 @@ struct BrowserView: View {
                 floatingNavBar
             }
         }
+        // The page must paint to the physical bottom edge (under the
+        // floating navbar and tab bar) — no white band below the navbar.
+        .ignoresSafeArea(edges: .bottom)
         .overlay(alignment: .top) {
             if let notice = capturedNotice {
                 Text(notice)
@@ -2459,6 +2462,7 @@ struct BrowserView: View {
                 Image(systemName: "chevron.left")
                     .font(.body.weight(.semibold))
                     .frame(width: 44, height: 44)
+                    .background(.ultraThinMaterial, in: Circle())
             }
             .keyboardShortcut("[", modifiers: .command)
             .disabled(session.selectedTab?.canGoBack != true)
@@ -2472,9 +2476,11 @@ struct BrowserView: View {
                     Image(systemName: "square.on.square")
                         .font(.body)
                         .frame(width: 44, height: 44)
+                        .background(.ultraThinMaterial, in: Circle())
                     Text("\(session.tabs.count)")
                         .font(.caption2.weight(.bold))
                         .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(.ultraThinMaterial, in: Capsule())
                         .offset(x: 4, y: -4)
                 }
             }
@@ -2483,6 +2489,7 @@ struct BrowserView: View {
                 Image(systemName: "ellipsis")
                     .font(.body.weight(.semibold))
                     .frame(width: 44, height: 44)
+                    .background(.ultraThinMaterial, in: Circle())
             }
             .sheet(isPresented: $showingMenuSheet) {
                 menuSheet
@@ -2523,6 +2530,8 @@ struct BrowserView: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
+        .background(.ultraThinMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
         .contextMenu {
             if let tab = session.selectedTab, let url = URL(string: tab.urlString), url.scheme != nil {
                 Button { UIPasteboard.general.url = url } label: {
