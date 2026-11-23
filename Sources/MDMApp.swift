@@ -33,6 +33,11 @@ struct MDMApp: App {
                        let value = comps.queryItems?.first(where: { $0.name == "url" })?.value {
                         _ = store.addItem(urlString: value)
                     }
+                    // A script file opened from Files (share sheet /
+                    // Open in) — import it as a userscript.
+                    if url.isFileURL, let message = store.importOpenedScriptFile(url) {
+                        store.lastImportMessage = message
+                    }
                 }
         }
     }

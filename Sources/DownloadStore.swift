@@ -20,6 +20,9 @@ final class DownloadStore: ObservableObject {
     @Published var remoteAddress: String?
     @Published var lastError: String?
     @Published var browserSettings = BrowserSettings()
+    /// Set when a script file is opened from another app (Files share
+    /// sheet / Open in), so the UI can confirm the import.
+    @Published var lastImportMessage: String?
     @Published var browserHistory: [BrowserHistoryEntry] = []
     @Published var readingList: [ReadingListItem] = []
 
@@ -75,6 +78,24 @@ final class DownloadStore: ObservableObject {
         var message = "\"\(name)\" diimpor\(meta.atStart ? " (awal dokumen)" : "")"
         if !meta.matches.isEmpty { message += " — hanya: \(meta.matches.joined(separator: ", "))" }
         return message
+    }
+
+    /// Imports a script file handed to the app (Files share sheet /
+    /// Open in). Copies it into Downloads too, so it also shows up in
+    /// My Files. Returns the message to show, or nil when the file is
+    /// not a script.
+    func importOpenedScriptFile(_ url: URL) -> String? {
+        guard ["js", "mjs", "txt"].contains(url.pathExtension.lowercased()) else { return nil }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url),
+              let source = BrowserExtension.decodeScript(data),
+              !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "File kosong atau bukan teks."
+        }
+        let dest = downloadsDir.appendingPathComponent(url.lastPathComponent)
+        if dest != url { try? FileManager.default.copyItem(at: url, to: dest) }
+        return importUserscript(source: source, fileName: url.lastPathComponent)
     }
 
     // MARK: - Browser history
