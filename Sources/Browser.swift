@@ -640,6 +640,14 @@ final class BrowserSession: ObservableObject {
     var onReadingListAdd: ((String, String) -> Void)?
     // DevTools (F12) state, fed by the in-page bridge script.
     var onDevToolsMessage: ((UUID, [String: Any]) -> Void)?
+    // Saved logins (password manager): messages from the in-page login
+    // bridge script, and the UI state they drive. Kept on the session
+    // (like the DevTools logs) so the script callback never captures
+    // the browser view itself.
+    var onLoginMessage: ((UUID, [String: Any]) -> Void)?
+    @Published var pendingSavePrompt: SaveLoginPrompt?
+    @Published var autofillOffer: AutofillOffer?
+    var declinedSaveKeys: Set<String> = []
     @Published var consoleLogs: [UUID: [DevConsoleEntry]] = [:]
     @Published var networkLogs: [UUID: [DevNetworkEntry]] = [:]
     @Published var inspectedElement: DevElementInfo?
@@ -985,6 +993,12 @@ final class BrowserSession: ObservableObject {
         ucc.addUserScript(WKUserScript(
             source: DevToolsBridge.script,
             injectionTime: .atDocumentStart,
+            forMainFrameOnly: true))
+        // Login capture: always present (even on compat hosts) so
+        // save prompts and autofill keep working there.
+        ucc.addUserScript(WKUserScript(
+            source: PasswordStore.detectionScript,
+            injectionTime: .atDocumentEnd,
             forMainFrameOnly: true))
         let compat = isCompatHost(webView.url?.host)
         if !compat {
@@ -1761,6 +1775,14 @@ struct BrowserWebView: UIViewRepresentable {
         // DevTools bridge: message handler + document-start script, added
         // before the first load so early console/network activity is seen.
         config.userContentController.add(context.coordinator, name: "mdmDevTools")
+        // Login capture: handler + document-end script, added before the
+        // first load so login forms are seen (configureContent re-adds
+        // the script after every navigation).
+        config.userContentController.add(context.coordinator, name: "mdmLogin")
+        config.userContentController.addUserScript(WKUserScript(
+            source: PasswordStore.detectionScript,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true))
         config.userContentController.addUserScript(WKUserScript(
             source: DevToolsBridge.script,
             injectionTime: .atDocumentStart,
@@ -2046,8 +2068,15 @@ struct BrowserWebView: UIViewRepresentable {
             keyWindow?.rootViewController?.present(sheet, animated: true)
         }
 
-        // DevTools bridge messages (console / fetch / XHR / inspect picks).
+        // Login-form bridge messages (save prompts, autofill offers).
+        // Private tabs never save or fill logins.
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.name == "mdmLogin" {
+                guard let body = message.body as? [String: Any] else { return }
+                if session.tabs.first(where: { $0.id == tabID })?.isIncognito == true { return }
+                session.onLoginMessage?(tabID, body)
+                return
+            }
             guard message.name == "mdmDevTools",
                   let body = message.body as? [String: Any] else { return }
             session.onDevToolsMessage?(tabID, body)
@@ -2244,11 +2273,11 @@ struct BrowserView: View {
             MenuGridItem(label: "Download", systemImage: "arrow.down.circle") {
                 if let exit = onExitToDownloads { exit() } else { dismiss() }
             },
-            MenuGridItem(label: "Incognito", systemImage: "eye.slash") { session.newTab(isIncognito: true) },
+            MenuGridItem(label: "Incognito", systemImage: "eye.slash") { session.newTab(isIncognito: true); capturedNotice = "Tab Incognito baru dibuka." },
             MenuGridItem(label: "Bagikan", systemImage: "square.and.arrow.up", isEnabled: shareURL != nil) {
                 if let url = shareURL { shareURLExternally(url) }
             },
-            MenuGridItem(label: "Tambah favorit", systemImage: "star") { addCurrentToBookmarks() },
+            MenuGridItem(label: "Tambah favorit", systemImage: "star", isEnabled: !isStart) { addCurrentToBookmarks() },
             MenuGridItem(label: "Mode Desktop", systemImage: "desktopcomputer", isActive: isDesktopUA) { toggleDesktopUA() },
             MenuGridItem(label: "Alat", systemImage: "briefcase", keepsSheetOpen: true) { menuPage = 1 },
             MenuGridItem(label: "Pengaturan", systemImage: "gearshape") { showingSettingsSheet = true },
@@ -2272,6 +2301,7 @@ struct BrowserView: View {
         tools.append(MenuGridItem(label: "Minta AI", systemImage: "sparkles") { openAI() })
         tools.append(MenuGridItem(label: "Cari video & media", systemImage: "play.rectangle.on.rectangle") { session.findMedia() })
         tools.append(MenuGridItem(label: "AdBlock & ekstensi", systemImage: "shield") { showingAdBlock = true })
+        tools.append(MenuGridItem(label: "Kata Sandi", systemImage: "key.fill") { showingPasswords = true })
         tools.append(MenuGridItem(label: "Hapus Data…", systemImage: "trash") { showingClearData = true })
 
         // 3. Navigasi & tab.
@@ -2335,8 +2365,23 @@ struct BrowserView: View {
     }
 
     private func shareURLExternally(_ url: URL) {
-        guard let top = mdmTopViewController() else { return }
-        top.present(UIActivityViewController(activityItems: [url], applicationActivities: nil), animated: true)
+        // The menu sheet is still dismissing when this runs; presenting
+        // from its view controller fails silently, so wait until it is
+        // gone and resolve the top controller then.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            guard let top = self.mdmTopViewController() else { return }
+            let activity = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+            if let popover = activity.popoverPresentationController,
+               let window = UIApplication.shared.connectedScenes
+                .compactMap({ $0 as? UIWindowScene })
+                .flatMap({ $0.windows })
+                .first(where: { $0.isKeyWindow }) {
+                popover.sourceView = window
+                popover.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 1, height: 1)
+                popover.permittedArrowDirections = []
+            }
+            top.present(activity, animated: true)
+        }
     }
 
     private func mdmTopViewController() -> UIViewController? {
@@ -2369,6 +2414,8 @@ struct BrowserView: View {
     @State private var aiContext: (title: String, url: String, text: String)?
     @State private var foundMedia: [URL] = []
     @State private var capturedNotice: String?
+    @State private var showingPasswords = false
+    @State private var showingAutofillPicker = false
     @FocusState private var addressFocused: Bool
 
     var body: some View {
@@ -2404,6 +2451,11 @@ struct BrowserView: View {
                         }
                         .padding(.trailing, 4)
                     }
+                }
+                if let prompt = session.pendingSavePrompt {
+                    saveLoginCard(prompt)
+                } else if let offer = session.autofillOffer {
+                    autofillCard(offer)
                 }
                 floatingNavBar
             }
@@ -2449,6 +2501,32 @@ struct BrowserView: View {
                 guard let session else { return }
                 DevToolsRouter.handle(session: session, tabID: tabID, body: body)
             }
+            session.onLoginMessage = { [weak session, weak store] tabID, body in
+                guard let session, let store else { return }
+                // Only the selected tab may prompt or offer; background
+                // tabs stay silent.
+                guard tabID == session.selectedID else { return }
+                guard let type = body["type"] as? String,
+                      let rawHost = body["host"] as? String, !rawHost.isEmpty else { return }
+                let host = PasswordStore.normalizeHost(rawHost)
+                if type == "detected" {
+                    let matches = store.passwords.logins(forHost: host)
+                    guard !matches.isEmpty else { return }
+                    guard PasswordStore.hostMatches(page: PasswordStore.normalizeHost(session.selectedTab?.host ?? ""), saved: host) else { return }
+                    session.autofillOffer = AutofillOffer(host: host, logins: matches)
+                    return
+                }
+                guard type == "submitted",
+                      let username = body["username"] as? String,
+                      let password = body["password"] as? String, !password.isEmpty else { return }
+                let key = "\(host)\n\(username)\n\(password)"
+                guard !session.declinedSaveKeys.contains(key) else { return }
+                if let existing = store.passwords.logins.first(where: { $0.host == host && $0.username == username }),
+                   store.passwords.password(for: existing) == password { return }
+                if let prompt = session.pendingSavePrompt,
+                   prompt.host == host, prompt.username == username, prompt.password == password { return }
+                session.pendingSavePrompt = SaveLoginPrompt(host: host, username: username, password: password)
+            }
             session.onHistoryRecord = { [weak store] title, url in
                 store?.recordHistory(title: title, urlString: url)
             }
@@ -2487,10 +2565,44 @@ struct BrowserView: View {
         .onChange(of: scenePhase) { phase in
             if phase != .active { session.saveTabs() }
         }
+        .onChange(of: session.selectedID) {
+            session.pendingSavePrompt = nil
+            session.autofillOffer = nil
+            showingAutofillPicker = false
+        }
         .onDisappear { session.saveTabs() }
         .sheet(isPresented: $showingAdBlock) {
             AdBlockPanelView()
                 .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showingPasswords) {
+            NavigationStack {
+                PasswordsView()
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Selesai") { showingPasswords = false } } }
+            }
+        }
+        .sheet(isPresented: $showingAutofillPicker) {
+            if let offer = session.autofillOffer {
+                NavigationStack {
+                    List(offer.logins) { login in
+                        Button {
+                            showingAutofillPicker = false
+                            Task {
+                                guard await BiometricAuth.authenticate(reason: "Isi login tersimpan untuk \(offer.host)") else { return }
+                                fillLogin(login)
+                            }
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Text(login.username.isEmpty ? "(tanpa nama pengguna)" : login.username)
+                                Text(offer.host).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .navigationTitle("Pilih login")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Batal") { showingAutofillPicker = false } } }
+                }
+            }
         }
         .sheet(isPresented: $showingCookies) {
             CookiesView(dataStore: cookieStore, host: currentCleanHost)
@@ -2944,7 +3056,10 @@ struct BrowserView: View {
 
     private func addCurrentToBookmarks() {
         guard let tab = session.selectedTab,
-              let url = URL(string: tab.urlString), url.scheme != nil else { return }
+              let url = URL(string: tab.urlString), url.scheme != nil else {
+            capturedNotice = "Buka halaman dulu sebelum menambah favorit."
+            return
+        }
         guard !store.browserSettings.bookmarks.contains(where: { $0.urlString == tab.urlString }) else {
             capturedNotice = "Sudah ada di favorit."
             return
@@ -2952,6 +3067,79 @@ struct BrowserView: View {
         store.browserSettings.bookmarks.append(BrowserBookmark(title: tab.displayTitle, urlString: tab.urlString))
         store.saveBrowserSettings()
         capturedNotice = "Ditambah ke favorit."
+    }
+
+    // MARK: - Saved logins (password manager cards + autofill)
+
+    /// Card offering to save (or update) the login just submitted.
+    private func saveLoginCard(_ prompt: SaveLoginPrompt) -> some View {
+        let isUpdate = store.passwords.logins.contains { $0.host == prompt.host && $0.username == prompt.username }
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(isUpdate ? "Perbarui kata sandi?" : "Simpan kata sandi?")
+                .font(.subheadline.weight(.semibold))
+            Text("\(prompt.username.isEmpty ? "(tanpa nama pengguna)" : prompt.username) • \(prompt.host)")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                Button("Simpan") {
+                    store.passwords.save(host: prompt.host, username: prompt.username, password: prompt.password)
+                    session.pendingSavePrompt = nil
+                    capturedNotice = "Kata sandi tersimpan."
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Jangan") {
+                    session.declinedSaveKeys.insert("\(prompt.host)\n\(prompt.username)\n\(prompt.password)")
+                    session.pendingSavePrompt = nil
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 12)
+    }
+
+    /// Card offering to fill a saved login for this page. Filling always
+    /// requires Face ID / the device passcode first.
+    private func autofillCard(_ offer: AutofillOffer) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "key.fill").foregroundStyle(.blue)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Login tersimpan untuk \(offer.host)").font(.subheadline.weight(.semibold))
+                Text("Isi otomatis memerlukan Face ID.").font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Isi") { requestAutofill(offer) }
+                .buttonStyle(.borderedProminent)
+            Button { session.autofillOffer = nil } label: { Image(systemName: "xmark") }
+                .buttonStyle(.plain)
+        }
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(.horizontal, 12)
+    }
+
+    private func requestAutofill(_ offer: AutofillOffer) {
+        if offer.logins.count == 1 {
+            let login = offer.logins[0]
+            Task {
+                guard await BiometricAuth.authenticate(reason: "Isi login tersimpan untuk \(offer.host)") else { return }
+                fillLogin(login)
+            }
+        } else {
+            showingAutofillPicker = true
+        }
+    }
+
+    private func fillLogin(_ login: SavedLogin) {
+        session.autofillOffer = nil
+        guard let password = store.passwords.password(for: login),
+              let webView = session.webViews[session.selectedID] else { return }
+        webView.evaluateJavaScript(PasswordStore.fillScript(username: login.username, password: password)) { result, _ in
+            DispatchQueue.main.async {
+                capturedNotice = (result as? Bool) == true ? "Login terisi." : "Kolom login tidak ditemukan di halaman ini."
+            }
+        }
     }
 
     private func openAI() {
@@ -2980,6 +3168,14 @@ struct StartPageView: View {
         ScrollView {
             VStack(spacing: 26) {
                 Spacer().frame(height: 8)
+                if session.selectedTab?.isIncognito == true {
+                    Label("Mode Incognito — riwayat, cookie, dan login tidak disimpan di tab ini.", systemImage: "theatermasks.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 14).padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(.horizontal, 20)
+                }
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                     TextField("Cari dengan \(store.browserSettings.searchEngine) atau masukkan alamat", text: $query)

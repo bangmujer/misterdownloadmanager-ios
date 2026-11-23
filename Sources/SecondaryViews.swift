@@ -92,6 +92,10 @@ struct SettingsView: View {
                     TextField("Home page", text: $store.browserSettings.homePage)
                         .autocapitalization(.none).autocorrectionDisabled()
                 }
+                Section("Kata Sandi") {
+                    NavigationLink("Kata Sandi tersimpan") { PasswordsView() }
+                    Text("Username dan kata sandi yang disimpan dari formulir login di browser. Kata sandi hanya tersimpan di Keychain perangkat ini, dan melihat, menyalin, atau mengisinya selalu meminta Face ID (atau kode sandi perangkat).").font(.caption).foregroundStyle(.secondary)
+                }
                 Section("Browser — AdBlock") {
                     Toggle("Ghostery AdBlock (EasyList + EasyPrivacy)", isOn: $store.browserSettings.adBlockEnabled)
                     Toggle("Custom AdBlock (your URL filters)", isOn: $store.browserSettings.customAdBlockEnabled)

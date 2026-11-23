@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 import UserNotifications
@@ -24,6 +25,11 @@ final class DownloadStore: ObservableObject {
     /// sheet / Open in), so the UI can confirm the import.
     @Published var lastImportMessage: String?
     @Published var browserHistory: [BrowserHistoryEntry] = []
+    /// Saved website logins (passwords live in the Keychain, metadata in
+    /// a JSON file). Changes forward to this store's objectWillChange so
+    /// views observing the DownloadStore refresh when logins change.
+    let passwords = PasswordStore()
+    private var cancellables: Set<AnyCancellable> = []
     @Published var readingList: [ReadingListItem] = []
 
     private var activeTasks: [UUID: Task<Void, Never>] = [:]
@@ -167,6 +173,7 @@ final class DownloadStore: ObservableObject {
     }
 
     init() {
+        passwords.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
         load()
         loadBrowserSettings()
         loadBrowserHistory()
