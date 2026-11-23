@@ -2052,6 +2052,229 @@ struct BrowserView: View {
     @State private var findQuery = ""
     @State private var findCount = 0
     @State private var showingReadingList = false
+    @State private var showingMenuSheet = false
+    @State private var showingSettingsSheet = false
+    @State private var menuPage = 0
+
+    // MARK: - Via-style bottom-sheet menu (icon grid, swipeable pages)
+
+    private struct MenuGridItem: Identifiable {
+        let id = UUID()
+        let label: String
+        let systemImage: String
+        var isEnabled: Bool = true
+        var isDestructive: Bool = false
+        var isActive: Bool = false
+        /// Runs without dismissing the sheet (used by the "Alat" page-switch cell).
+        var keepsSheetOpen: Bool = false
+        let action: () -> Void
+    }
+
+    private var menuSheet: some View {
+        VStack(spacing: 0) {
+            TabView(selection: $menuPage) {
+                ForEach(menuPages.indices, id: \.self) { pageIndex in
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 5), spacing: 18) {
+                        ForEach(menuPages[pageIndex]) { item in menuGridCell(item) }
+                    }
+                    .padding(.horizontal, 10)
+                    .tag(pageIndex)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .always))
+            .frame(height: 168)
+            Button { showingMenuSheet = false } label: {
+                Image(systemName: "chevron.down")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 30)
+            }
+            .padding(.bottom, 6)
+        }
+        .padding(.top, 14)
+        .onAppear { menuPage = 0 }
+    }
+
+    private func menuGridCell(_ item: MenuGridItem) -> some View {
+        Button {
+            if item.keepsSheetOpen {
+                item.action()
+            } else {
+                showingMenuSheet = false
+                let action = item.action
+                DispatchQueue.main.async { action() }
+            }
+        } label: {
+            VStack(spacing: 6) {
+                Image(systemName: item.systemImage)
+                    .font(.title2)
+                    .frame(height: 30)
+                Text(item.label)
+                    .font(.caption2)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(item.isDestructive ? .red : (item.isActive ? .blue : .primary))
+        .disabled(!item.isEnabled)
+        .opacity(item.isEnabled ? 1 : 0.4)
+    }
+
+    /// Pages grouped by function: general (Via's first page), page tools,
+    /// navigation & tabs, and per-site controls. Each group fills its own
+    /// page; a trailing page with fewer than 4 cells borrows cells from
+    /// the previous page so no page looks empty.
+    private var menuPages: [[MenuGridItem]] {
+        var pages: [[MenuGridItem]] = []
+        for group in menuGroups where !group.isEmpty {
+            pages.append(contentsOf: stride(from: 0, to: group.count, by: 10).map { Array(group[$0..<min($0 + 10, group.count)]) })
+        }
+        while pages.count > 1, let lastCount = pages.last?.count, lastCount < 4,
+              pages[pages.count - 2].count > 4 {
+            let moved = pages[pages.count - 2].removeLast()
+            pages[pages.count - 1].insert(moved, at: 0)
+        }
+        return pages
+    }
+
+    private var menuGroups: [[MenuGridItem]] {
+        let tab = session.selectedTab
+        let isStart = tab?.showsStartPage == true
+        let host = (tab?.host ?? "").isEmpty ? nil : tab?.host
+        let shareURL = (tab?.urlString).flatMap { URL(string: $0) }.flatMap { $0.scheme != nil ? $0 : nil }
+
+        // 1. Umum — same order as Via's first page.
+        let general: [MenuGridItem] = [
+            MenuGridItem(label: "Mode Malam", systemImage: isNightMode ? "moon.fill" : "moon", isActive: isNightMode) { toggleNightMode() },
+            MenuGridItem(label: "Bookmark", systemImage: "bookmark") { showingBookmarks = true },
+            MenuGridItem(label: "Riwayat", systemImage: "clock") { showingHistory = true },
+            MenuGridItem(label: "Download", systemImage: "arrow.down.circle") {
+                if let exit = onExitToDownloads { exit() } else { dismiss() }
+            },
+            MenuGridItem(label: "Incognito", systemImage: "eye.slash") { session.newTab(isIncognito: true) },
+            MenuGridItem(label: "Bagikan", systemImage: "square.and.arrow.up", isEnabled: shareURL != nil) {
+                if let url = shareURL { shareURLExternally(url) }
+            },
+            MenuGridItem(label: "Tambah favorit", systemImage: "star") { addCurrentToBookmarks() },
+            MenuGridItem(label: "Mode Desktop", systemImage: "desktopcomputer", isActive: isDesktopUA) { toggleDesktopUA() },
+            MenuGridItem(label: "Alat", systemImage: "briefcase", keepsSheetOpen: true) { menuPage = 1 },
+            MenuGridItem(label: "Pengaturan", systemImage: "gearshape") { showingSettingsSheet = true },
+        ]
+
+        // 2. Alat halaman: simpan, cari, baca, dan olah halaman ini.
+        var tools: [MenuGridItem] = [
+            MenuGridItem(label: "Daftar Bacaan", systemImage: "list.bullet") { showingReadingList = true },
+            MenuGridItem(label: "Tambah ke Daftar Bacaan", systemImage: "text.badge.plus", isEnabled: !isStart) { addCurrentToReadingList() },
+            MenuGridItem(label: "Cari di halaman", systemImage: "magnifyingglass", isEnabled: !isStart) { showingFind = true },
+        ]
+        if translatedTab == tab?.id {
+            tools.append(MenuGridItem(label: "Tampilkan halaman asli", systemImage: "arrow.uturn.backward") { showOriginalPage() })
+        } else {
+            tools.append(MenuGridItem(label: "Terjemahkan halaman", systemImage: "translate", isEnabled: !isStart) { showingTranslate = true })
+        }
+        tools.append(MenuGridItem(label: "Mode Baca", systemImage: "book", isEnabled: !isStart) { openReaderMode() })
+        if store.browserSettings.showDevToolsButton {
+            tools.append(MenuGridItem(label: "DevTools", systemImage: "chevron.left.forwardslash.chevron.right") { showingDevTools = true })
+        }
+        tools.append(MenuGridItem(label: "Minta AI", systemImage: "sparkles") { openAI() })
+        tools.append(MenuGridItem(label: "Cari video & media", systemImage: "play.rectangle.on.rectangle") { session.findMedia() })
+        tools.append(MenuGridItem(label: "AdBlock & ekstensi", systemImage: "shield") { showingAdBlock = true })
+        tools.append(MenuGridItem(label: "Hapus Data…", systemImage: "trash") { showingClearData = true })
+
+        // 3. Navigasi & tab.
+        let navigation: [MenuGridItem] = [
+            MenuGridItem(label: "Beranda", systemImage: "house") { session.resetTab(session.selectedID) },
+            MenuGridItem(label: "Tab Baru", systemImage: "plus") { session.newTab() },
+            MenuGridItem(label: "Maju", systemImage: "chevron.right", isEnabled: tab?.canGoForward == true) { session.goForward() },
+            MenuGridItem(label: "Riwayat maju", systemImage: "list.bullet", isEnabled: tab?.canGoForward == true) { showingForwardHistory = true },
+            MenuGridItem(label: "Fokus ke Alamat", systemImage: "magnifyingglass.circle") { focusAddressBar() },
+            MenuGridItem(label: "Muat Ulang", systemImage: "arrow.clockwise", isEnabled: !isStart) { session.reload() },
+            MenuGridItem(label: "Muat Ulang Penuh", systemImage: "arrow.clockwise.circle", isEnabled: !isStart) { session.hardReload() },
+            MenuGridItem(label: "Tutup tab", systemImage: "xmark", isDestructive: true) {
+                if let id = tab?.id { session.closeTab(id) }
+            },
+        ]
+
+        // 4. Situs ini: per-site toggles, zoom, PiP, dan cetak.
+        var site: [MenuGridItem] = []
+        if let host {
+            let frozen = hostMatches(host, in: store.browserSettings.freezeTimerHosts)
+            site.append(MenuGridItem(label: frozen ? "Freeze timer di situs ini ✓" : "Freeze timer di situs ini", systemImage: "timer", isActive: frozen) { toggleFreezeTimer(for: host) })
+            let compat = hostMatches(host, in: store.browserSettings.drmCompatHosts)
+            site.append(MenuGridItem(label: compat ? "Mode kompatibilitas di situs ini ✓" : "Mode kompatibilitas di situs ini", systemImage: "play.display", isActive: compat) { toggleCompatMode(for: host) })
+            if !isStart {
+                site.append(MenuGridItem(label: "Perkecil tampilan", systemImage: "minus.magnifyingglass") { adjustZoom(by: -0.1) })
+                site.append(MenuGridItem(label: "Perbesar tampilan", systemImage: "plus.magnifyingglass") { adjustZoom(by: 0.1) })
+                site.append(MenuGridItem(label: "Reset zoom ke 100%", systemImage: "arrow.counterclockwise", isEnabled: zoomScale(for: host) != 1.0) { resetZoom() })
+            }
+        }
+        if store.browserSettings.pictureInPicture {
+            site.append(MenuGridItem(label: "Picture in Picture", systemImage: "pip.enter") { enterPictureInPicture() })
+        }
+        site.append(MenuGridItem(label: "Cetak Halaman", systemImage: "printer", isEnabled: !isStart) { session.printCurrentPage() })
+
+        return [general, tools, navigation, site]
+    }
+
+    private var isNightMode: Bool {
+        ["dark", "metro", "breeze", "highContrast"].contains(store.settings.themeName)
+    }
+
+    private func toggleNightMode() {
+        store.settings.themeName = isNightMode ? "light" : "dark"
+        store.save()
+    }
+
+    private var isDesktopUA: Bool {
+        store.browserSettings.userAgentPreset == UserAgentPreset.mac.rawValue
+    }
+
+    private func toggleDesktopUA() {
+        store.browserSettings.userAgentPreset = isDesktopUA ? UserAgentPreset.default.rawValue : UserAgentPreset.mac.rawValue
+        store.saveBrowserSettings()
+        if session.selectedTab?.showsStartPage != true { session.reload() }
+    }
+
+    private func focusAddressBar() {
+        if let tab = session.selectedTab { addressDraft = tab.urlString }
+        isEditingAddress = true
+        addressFocused = true
+    }
+
+    private func shareURLExternally(_ url: URL) {
+        guard let top = mdmTopViewController() else { return }
+        top.present(UIActivityViewController(activityItems: [url], applicationActivities: nil), animated: true)
+    }
+
+    private func mdmTopViewController() -> UIViewController? {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              var top = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController else { return nil }
+        while let presented = top.presentedViewController { top = presented }
+        return top
+    }
+
+    /// Keyboard shortcuts kept from the old overflow Menu (Cmd+T/R/L/F/D/W/]/P and zoom).
+    private var menuKeyboardShortcuts: some View {
+        VStack {
+            Button { session.newTab() } label: { EmptyView() }.keyboardShortcut("t", modifiers: .command)
+            Button { if session.selectedTab?.showsStartPage != true { session.reload() } } label: { EmptyView() }.keyboardShortcut("r", modifiers: .command)
+            Button { if session.selectedTab?.showsStartPage != true { session.hardReload() } } label: { EmptyView() }.keyboardShortcut("r", modifiers: [.command, .shift])
+            Button { focusAddressBar() } label: { EmptyView() }.keyboardShortcut("l", modifiers: .command)
+            Button { if session.selectedTab?.showsStartPage != true { showingFind = true } } label: { EmptyView() }.keyboardShortcut("f", modifiers: .command)
+            Button { addCurrentToBookmarks() } label: { EmptyView() }.keyboardShortcut("d", modifiers: .command)
+            Button { if session.selectedTab?.canGoForward == true { session.goForward() } } label: { EmptyView() }.keyboardShortcut("]", modifiers: .command)
+            Button { if let id = session.selectedTab?.id { session.closeTab(id) } } label: { EmptyView() }.keyboardShortcut("w", modifiers: .command)
+            if let host = session.selectedTab?.host, !host.isEmpty, session.selectedTab?.showsStartPage != true {
+                Button { adjustZoom(by: -0.1) } label: { EmptyView() }.keyboardShortcut("-", modifiers: .command)
+                Button { adjustZoom(by: 0.1) } label: { EmptyView() }.keyboardShortcut("=", modifiers: .command)
+                Button { resetZoom() } label: { EmptyView() }.keyboardShortcut("0", modifiers: .command)
+            }
+            Button { if session.selectedTab?.showsStartPage != true { session.printCurrentPage() } } label: { EmptyView() }.keyboardShortcut("p", modifiers: .command)
+        }
+        .opacity(0)
+    }
     @State private var aiContext: (title: String, url: String, text: String)?
     @State private var foundMedia: [URL] = []
     @State private var capturedNotice: String?
@@ -2249,100 +2472,21 @@ struct BrowserView: View {
                 }
             }
 
-            Menu {
-                Button {
-                    if let exit = onExitToDownloads { exit() } else { dismiss() }
-                } label: { Label("Kembali ke Download", systemImage: "xmark.circle") }
-                Button { session.resetTab(session.selectedID) } label: { Label("Beranda", systemImage: "house") }
-                Button { session.newTab() } label: { Label("Tab Baru", systemImage: "plus") }
-                    .keyboardShortcut("t", modifiers: .command)
-                Button { session.reload() } label: { Label("Muat Ulang", systemImage: "arrow.clockwise") }
-                    .keyboardShortcut("r", modifiers: .command)
-                    .disabled(session.selectedTab?.showsStartPage == true)
-                Button { session.hardReload() } label: { Label("Muat Ulang Penuh", systemImage: "arrow.clockwise.circle") }
-                    .keyboardShortcut("r", modifiers: [.command, .shift])
-                    .disabled(session.selectedTab?.showsStartPage == true)
-                Button {
-                    if let tab = session.selectedTab { addressDraft = tab.urlString }
-                    isEditingAddress = true
-                    addressFocused = true
-                } label: { Label("Fokus ke Alamat", systemImage: "magnifyingglass") }
-                    .keyboardShortcut("l", modifiers: .command)
-                if store.browserSettings.showDevToolsButton {
-                    Button { showingDevTools = true } label: { Label("DevTools (F12)", systemImage: "chevron.left.forwardslash.chevron.right") }
-                }
-                Button { showingHistory = true } label: { Label("Riwayat", systemImage: "clock") }
-                Button { showingBookmarks = true } label: { Label("Bookmark", systemImage: "bookmark") }
-                Button { openReaderMode() } label: { Label("Mode Baca", systemImage: "book") }
-                    .disabled(session.selectedTab?.showsStartPage == true)
-                if translatedTab == session.selectedTab?.id {
-                    Button { showOriginalPage() } label: { Label("Tampilkan halaman asli", systemImage: "arrow.uturn.backward") }
-                } else {
-                    Button { showingTranslate = true } label: { Label("Terjemahkan halaman…", systemImage: "translate") }
-                        .disabled(session.selectedTab?.showsStartPage == true)
-                }
-                Button { showingFind = true } label: { Label("Cari di halaman", systemImage: "magnifyingglass") }
-                    .keyboardShortcut("f", modifiers: .command)
-                    .disabled(session.selectedTab?.showsStartPage == true)
-                Button { addCurrentToReadingList() } label: { Label("Tambah ke Daftar Bacaan", systemImage: "text.badge.plus") }
-                    .disabled(session.selectedTab?.showsStartPage == true)
-                Button { showingReadingList = true } label: { Label("Daftar Bacaan", systemImage: "list.bullet") }
-                Button { showingClearData = true } label: { Label("Hapus Data Penjelajahan…", systemImage: "trash") }
-                if store.browserSettings.pictureInPicture {
-                    Button { enterPictureInPicture() } label: { Label("Picture in Picture", systemImage: "pip.enter") }
-                }
-                Divider()
-                Button { session.goForward() } label: { Label("Maju", systemImage: "chevron.right") }
-                    .keyboardShortcut("]", modifiers: .command)
-                    .disabled(session.selectedTab?.canGoForward != true)
-                Button { showingForwardHistory = true } label: { Label("Riwayat maju…", systemImage: "list.bullet") }
-                    .disabled(session.selectedTab?.canGoForward != true)
-                if let tab = session.selectedTab, let link = URL(string: tab.urlString), link.scheme != nil {
-                    ShareLink(item: link) { Label("Bagikan…", systemImage: "square.and.arrow.up") }
-                }
-                Button { session.findMedia() } label: { Label("Cari video & media", systemImage: "play.rectangle.on.rectangle") }
-                Button { addCurrentToBookmarks() } label: { Label("Tambah ke favorit", systemImage: "star") }
-                    .keyboardShortcut("d", modifiers: .command)
-                if let host = session.selectedTab?.host, !host.isEmpty {
-                    Button { toggleFreezeTimer(for: host) } label: {
-                        Label(hostMatches(host, in: store.browserSettings.freezeTimerHosts) ? "Freeze timer di situs ini ✓" : "Freeze timer di situs ini", systemImage: "timer")
-                    }
-                    Button { toggleCompatMode(for: host) } label: {
-                        Label(hostMatches(host, in: store.browserSettings.drmCompatHosts) ? "Mode kompatibilitas di situs ini ✓" : "Mode kompatibilitas di situs ini", systemImage: "play.display")
-                    }
-                }
-                Button { openAI() } label: { Label("Minta AI", systemImage: "sparkles") }
-                Picker("User Agent", selection: $store.browserSettings.userAgentPreset) {
-                    ForEach(UserAgentPreset.allCases) { preset in
-                        Text(preset.label).tag(preset.rawValue)
-                    }
-                }
-                if let host = session.selectedTab?.host, !host.isEmpty, session.selectedTab?.showsStartPage != true {
-                    Button { adjustZoom(by: -0.1) } label: { Label("Perkecil tampilan", systemImage: "minus.magnifyingglass") }
-                        .keyboardShortcut("-", modifiers: .command)
-                    Button {} label: { Label("Zoom situs ini: \(Int(zoomScale(for: host) * 100))%", systemImage: "magnifyingglass") }
-                        .disabled(true)
-                    Button { adjustZoom(by: 0.1) } label: { Label("Perbesar tampilan", systemImage: "plus.magnifyingglass") }
-                        .keyboardShortcut("=", modifiers: .command)
-                    Button { resetZoom() } label: { Label("Reset zoom ke 100%", systemImage: "arrow.counterclockwise") }
-                        .keyboardShortcut("0", modifiers: .command)
-                        .disabled(zoomScale(for: host) == 1.0)
-                }
-                Button { session.printCurrentPage() } label: { Label("Cetak Halaman…", systemImage: "printer") }
-                    .keyboardShortcut("p", modifiers: .command)
-                    .disabled(session.selectedTab?.showsStartPage == true)
-                Button { showingAdBlock = true } label: { Label("AdBlock & ekstensi", systemImage: "shield") }
-                Divider()
-                Button(role: .destructive) {
-                    if let id = session.selectedTab?.id { session.closeTab(id) }
-                } label: { Label("Tutup tab", systemImage: "xmark") }
-                    .keyboardShortcut("w", modifiers: .command)
-            } label: {
+            Button { showingMenuSheet = true } label: {
                 Image(systemName: "ellipsis")
                     .font(.body.weight(.semibold))
                     .frame(width: 44, height: 44)
                     .background(.ultraThinMaterial, in: Circle())
             }
+            .sheet(isPresented: $showingMenuSheet) {
+                menuSheet
+                    .presentationDetents([.height(280)])
+                    .presentationDragIndicator(.hidden)
+            }
+            .sheet(isPresented: $showingSettingsSheet) {
+                SettingsView(showsDoneButton: true)
+            }
+            .background(menuKeyboardShortcuts)
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
