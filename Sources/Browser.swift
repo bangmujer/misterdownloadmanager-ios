@@ -884,6 +884,17 @@ final class BrowserSession: ObservableObject {
         webView.evaluateJavaScript("window.__mdmSetChromeBottom && window.__mdmSetChromeBottom(\(bottomScrollInset))", completionHandler: nil)
     }
 
+    /// Injects the bottom-bar lift script into a live document (the
+    /// script guards against double-install) and pushes the current
+    /// chrome height. User scripts only run at document load, so a tab
+    /// whose document predates the build that added the script would
+    /// never get the lift until a reload — this heals that on tab
+    /// attach and on finished navigation.
+    func installBottomBarLift(to webView: WKWebView) {
+        webView.evaluateJavaScript(BrowserSession.bottomBarLiftScript, completionHandler: nil)
+        pushBottomBarLift(to: webView)
+    }
+
     /// Applies the host's zoom with the CSS `zoom` property WebKit honours.
     /// Re-applied on every finished navigation (didFinish), since a new
     /// document starts at 100%. Clearing the property restores 100%.
@@ -1207,135 +1218,176 @@ final class BrowserSession: ObservableObject {
     /// they already had. Full-screen overlays and tall elements are
     /// never touched.
     static let bottomBarLiftScript = """
-    (function () {
-      var ORIG_BOTTOM = 'data-mdm-orig-bottom';
-      var ORIG_TRANSFORM = 'data-mdm-orig-transform';
-      var LIFT_PX = 'data-mdm-lift-px';
-      var lifted = [];
-      var scheduled = false;
-      var lastApply = 0;
-      function rectIsBar(r, vh, px, slack) {
-        if (r.height <= 0 || r.height > vh * 0.45) return false;
-        if (r.width < 40) return false;
-        if (r.top < vh * 0.5) return false;
-        if (Math.abs(r.bottom - vh) <= slack) return true;
-        if (px > 0 && Math.abs(r.bottom - (vh - px)) <= slack) return true;
-        return false;
+(function () {
+  if (window.__mdmLiftInstalled) return;
+  window.__mdmLiftInstalled = true;
+  var ORIG_BOTTOM = 'data-mdm-orig-bottom';
+  var ORIG_TRANSFORM = 'data-mdm-orig-transform';
+  var LIFT_PX = 'data-mdm-lift-px';
+  var lifted = [];
+  var scheduled = false;
+  var lastApply = 0;
+  var hadBar = false;
+  function log(msg) { try { console.log('[MDM lift] ' + msg); } catch (e) {} }
+  function describe(el) {
+    var s = el.tagName ? el.tagName.toLowerCase() : '?';
+    if (el.id) s += '#' + el.id;
+    var cn = el.className;
+    if (typeof cn === 'string' && cn) s += '.' + cn.split(' ').join('.');
+    return s;
+  }
+  function rectIsBar(r, vh, px, slack) {
+    if (r.height <= 0 || r.height > vh * 0.45) return false;
+    if (r.width < 40) return false;
+    if (r.top < vh * 0.5) return false;
+    if (Math.abs(r.bottom - vh) <= slack) return true;
+    if (px > 0 && Math.abs(r.bottom - (vh - px)) <= slack) return true;
+    return false;
+  }
+  function isLastVisibleChild(node, parent) {
+    var kids = parent.children;
+    for (var i = kids.length - 1; i >= 0; i--) {
+      var k = kids[i];
+      var kcs = window.getComputedStyle(k);
+      if (kcs.display === 'none') continue;
+      if (k.getBoundingClientRect().height <= 0) continue;
+      return k === node;
+    }
+    return false;
+  }
+  function isShellBar(el) {
+    var cs = window.getComputedStyle(el);
+    if (cs.position !== 'static' && cs.position !== 'relative') return false;
+    var node = el;
+    while (node) {
+      var parent = node.parentElement;
+      if (!parent) return false;
+      if (!isLastVisibleChild(node, parent)) return false;
+      var pr = parent.getBoundingClientRect();
+      if (Math.abs(pr.height - window.innerHeight) <= 4 && Math.abs(pr.top) <= 4) return true;
+      if (parent === document.documentElement) return false;
+      node = parent;
+    }
+    return false;
+  }
+  function isBottomBar(el, px, slack) {
+    if (!(el instanceof HTMLElement)) return false;
+    var cs = window.getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+    if (!rectIsBar(el.getBoundingClientRect(), window.innerHeight, px, slack)) return false;
+    var pos = cs.position;
+    if (pos === 'fixed' || pos === 'sticky' || pos === 'absolute') return true;
+    return isShellBar(el);
+  }
+  function parentOf(el) {
+    if (el.parentElement) return el.parentElement;
+    var root = el.getRootNode ? el.getRootNode() : null;
+    if (root && root instanceof ShadowRoot) return root.host;
+    return null;
+  }
+  function elementChildren(root) {
+    if (root.children) return root.children;
+    var out = [];
+    var nodes = root.childNodes || [];
+    for (var i = 0; i < nodes.length; i++) if (nodes[i].nodeType === 1) out.push(nodes[i]);
+    return out;
+  }
+  function deepestAtPoint(el, x, y) {
+    var node = el;
+    while (node && node.shadowRoot) {
+      var kids = elementChildren(node.shadowRoot);
+      var found = null;
+      for (var i = kids.length - 1; i >= 0; i--) {
+        var r = kids[i].getBoundingClientRect();
+        if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) { found = kids[i]; break; }
       }
-      function isLastVisibleChild(node, parent) {
-        var kids = parent.children;
-        for (var i = kids.length - 1; i >= 0; i--) {
-          var k = kids[i];
-          var kcs = window.getComputedStyle(k);
-          if (kcs.display === 'none') continue;
-          if (k.getBoundingClientRect().height <= 0) continue;
-          return k === node;
-        }
-        return false;
+      if (!found) break;
+      node = found;
+    }
+    return node;
+  }
+  function barFromHit(el, px) {
+    var node = el;
+    var found = null;
+    while (node && node !== document.documentElement) {
+      if (node instanceof HTMLElement && isBottomBar(node, px, 70)) found = node;
+      node = parentOf(node);
+    }
+    return found;
+  }
+  function restore(el) {
+    el.style.bottom = el.getAttribute(ORIG_BOTTOM) || '';
+    el.style.transform = el.getAttribute(ORIG_TRANSFORM) || '';
+    el.removeAttribute(LIFT_PX);
+    el.removeAttribute(ORIG_BOTTOM);
+    el.removeAttribute(ORIG_TRANSFORM);
+  }
+  function lift(el, px) {
+    if (!el.hasAttribute(ORIG_BOTTOM)) el.setAttribute(ORIG_BOTTOM, el.style.bottom || '');
+    if (!el.hasAttribute(ORIG_TRANSFORM)) el.setAttribute(ORIG_TRANSFORM, el.style.transform || '');
+    if (el.getAttribute(LIFT_PX) === String(px)) return;
+    el.setAttribute(LIFT_PX, String(px));
+    var origBottom = el.getAttribute(ORIG_BOTTOM) || '';
+    var origTransform = el.getAttribute(ORIG_TRANSFORM) || '';
+    if (px > 0) {
+      var before = el.getBoundingClientRect().bottom;
+      el.style.bottom = px + 'px';
+      var moved = (before - el.getBoundingClientRect().bottom) > 3;
+      el.style.transform = moved ? origTransform : (origTransform + ' translateY(' + (-px) + 'px)');
+    } else {
+      el.style.bottom = origBottom;
+      el.style.transform = origTransform;
+    }
+  }
+  function apply() {
+    var px = window.__mdmChromeBottom || 0;
+    var kept = [];
+    for (var i = 0; i < lifted.length; i++) {
+      var prev = lifted[i];
+      if (prev.isConnected && isBottomBar(prev, px, 3)) { lift(prev, px); kept.push(prev); }
+      else { restore(prev); log('restore ' + describe(prev)); }
+    }
+    lifted = kept;
+    var w = window.innerWidth;
+    var vh = window.innerHeight;
+    var xs = [w * 0.1, w * 0.5, w * 0.9];
+    var ys = [vh - 2, vh - 60];
+    for (var a = 0; a < ys.length; a++) {
+      for (var k = 0; k < xs.length; k++) {
+        var hit = document.elementFromPoint(xs[k], ys[a]);
+        if (!hit) continue;
+        hit = deepestAtPoint(hit, xs[k], ys[a]);
+        var bar = barFromHit(hit, px);
+        if (bar && lifted.indexOf(bar) === -1) { lifted.push(bar); lift(bar, px); log('lift ' + describe(bar) + ' px=' + px); }
       }
-      function isShellBar(el) {
-        var cs = window.getComputedStyle(el);
-        if (cs.position !== 'static' && cs.position !== 'relative') return false;
-        var node = el;
-        while (node) {
-          var parent = node.parentElement;
-          if (!parent) return false;
-          if (!isLastVisibleChild(node, parent)) return false;
-          var pr = parent.getBoundingClientRect();
-          if (Math.abs(pr.height - window.innerHeight) <= 4 && Math.abs(pr.top) <= 4) return true;
-          if (parent === document.documentElement) return false;
-          node = parent;
-        }
-        return false;
-      }
-      function isBottomBar(el, px, slack) {
-        if (!(el instanceof HTMLElement)) return false;
-        var cs = window.getComputedStyle(el);
-        if (cs.display === 'none' || cs.visibility === 'hidden') return false;
-        if (!rectIsBar(el.getBoundingClientRect(), window.innerHeight, px, slack)) return false;
-        var pos = cs.position;
-        if (pos === 'fixed' || pos === 'sticky' || pos === 'absolute') return true;
-        return isShellBar(el);
-      }
-      function barFromHit(el, px) {
-        var node = el;
-        var found = null;
-        while (node && node !== document.documentElement) {
-          if (node instanceof HTMLElement && isBottomBar(node, px, 70)) found = node;
-          node = node.parentElement;
-        }
-        return found;
-      }
-      function restore(el) {
-        el.style.bottom = el.getAttribute(ORIG_BOTTOM) || '';
-        el.style.transform = el.getAttribute(ORIG_TRANSFORM) || '';
-        el.removeAttribute(LIFT_PX);
-        el.removeAttribute(ORIG_BOTTOM);
-        el.removeAttribute(ORIG_TRANSFORM);
-      }
-      function lift(el, px) {
-        if (!el.hasAttribute(ORIG_BOTTOM)) el.setAttribute(ORIG_BOTTOM, el.style.bottom || '');
-        if (!el.hasAttribute(ORIG_TRANSFORM)) el.setAttribute(ORIG_TRANSFORM, el.style.transform || '');
-        if (el.getAttribute(LIFT_PX) === String(px)) return;
-        el.setAttribute(LIFT_PX, String(px));
-        var origBottom = el.getAttribute(ORIG_BOTTOM) || '';
-        var origTransform = el.getAttribute(ORIG_TRANSFORM) || '';
-        if (px > 0) {
-          var before = el.getBoundingClientRect().bottom;
-          el.style.bottom = px + 'px';
-          var moved = (before - el.getBoundingClientRect().bottom) > 3;
-          el.style.transform = moved ? origTransform : (origTransform + ' translateY(' + (-px) + 'px)');
-        } else {
-          el.style.bottom = origBottom;
-          el.style.transform = origTransform;
-        }
-      }
-      function apply() {
-        var px = window.__mdmChromeBottom || 0;
-        var kept = [];
-        for (var i = 0; i < lifted.length; i++) {
-          var prev = lifted[i];
-          if (prev.isConnected && isBottomBar(prev, px, 3)) { lift(prev, px); kept.push(prev); }
-          else restore(prev);
-        }
-        lifted = kept;
-        var w = window.innerWidth;
-        var vh = window.innerHeight;
-        var xs = [w * 0.1, w * 0.5, w * 0.9];
-        var ys = [vh - 2, vh - 60];
-        for (var a = 0; a < ys.length; a++) {
-          for (var k = 0; k < xs.length; k++) {
-            var hit = document.elementFromPoint(xs[k], ys[a]);
-            if (!hit) continue;
-            var bar = barFromHit(hit, px);
-            if (bar && lifted.indexOf(bar) === -1) { lifted.push(bar); lift(bar, px); }
-          }
-        }
-      }
-      function schedule() {
-        if (scheduled) return;
-        scheduled = true;
-        var delay = Math.max(0, 350 - (Date.now() - lastApply));
-        setTimeout(function () { scheduled = false; lastApply = Date.now(); apply(); }, delay);
-      }
-      window.__mdmSetChromeBottom = function (px) {
-        window.__mdmChromeBottom = px;
-        schedule();
-      };
-      function watch() {
-        schedule();
-        if (window.MutationObserver) {
-          var mo = new MutationObserver(schedule);
-          mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
-        }
-        window.addEventListener('resize', schedule);
-        window.addEventListener('orientationchange', schedule);
-        window.addEventListener('scroll', schedule);
-      }
-      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
-      else watch();
-    })();
-    """
+    }
+    if (lifted.length === 0 && hadBar) log('no bar at bottom');
+    hadBar = lifted.length > 0;
+  }
+  function schedule() {
+    if (scheduled) return;
+    scheduled = true;
+    var delay = Math.max(0, 350 - (Date.now() - lastApply));
+    setTimeout(function () { scheduled = false; lastApply = Date.now(); apply(); }, delay);
+  }
+  window.__mdmSetChromeBottom = function (px) {
+    window.__mdmChromeBottom = px;
+    schedule();
+  };
+  function watch() {
+    schedule();
+    if (window.MutationObserver) {
+      var mo = new MutationObserver(schedule);
+      mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+    }
+    window.addEventListener('resize', schedule);
+    window.addEventListener('orientationchange', schedule);
+    window.addEventListener('scroll', schedule);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
+  else watch();
+})();
+"""
 
     /// Enters Picture in Picture on the playing (or first) <video>.
     /// Returns a JSON diagnostic so a failed attempt on-device says WHY:
@@ -2032,6 +2084,7 @@ struct BrowserWebView: UIViewRepresentable {
         func observe(webView: WKWebView) {
             self.webView = webView
             session.applyScrollInsets()
+            session.installBottomBarLift(to: webView)
             // Correct any stale tab state left by a previous coordinator
             // (e.g. isLoading stuck true) right away.
             session.updateTab(id: tabID, title: webView.title, urlString: webView.url?.absoluteString,
@@ -2075,7 +2128,7 @@ struct BrowserWebView: UIViewRepresentable {
             session.clearPending(for: tabID)
             session.refreshCompatibility(for: webView)
             session.applyZoom(to: webView)
-            session.pushBottomBarLift(to: webView)
+            session.installBottomBarLift(to: webView)
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
