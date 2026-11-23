@@ -2088,11 +2088,15 @@ struct BrowserView: View {
                         ForEach(menuPages[pageIndex]) { item in menuGridCell(item) }
                     }
                     .padding(.horizontal, 10)
+                    // Pin the grid to the top of the page so the paging dots
+                    // get their own band below it instead of sitting on the
+                    // second row's labels.
+                    .frame(maxHeight: .infinity, alignment: .top)
                     .tag(pageIndex)
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .always))
-            .frame(height: 168)
+            .frame(height: 184)
             Button { showingMenuSheet = false } label: {
                 Image(systemName: "chevron.down")
                     .font(.body.weight(.semibold))
@@ -2493,7 +2497,7 @@ struct BrowserView: View {
             }
             .sheet(isPresented: $showingMenuSheet) {
                 menuSheet
-                    .presentationDetents([.height(280)])
+                    .presentationDetents([.height(240)])
                     .presentationDragIndicator(.hidden)
             }
             .sheet(isPresented: $showingSettingsSheet) {
