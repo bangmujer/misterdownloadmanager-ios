@@ -62,6 +62,83 @@ private struct IntField: View {
     }
 }
 
+/// Speed-limit row: a dropdown of presets (including unlimited) plus a
+/// custom value with a KB/MB/GB unit choice. Stored as KB/s; 0 means
+/// unlimited.
+private struct SpeedLimitRow: View {
+    @Binding var kbps: Int
+    @State private var customUnit: Int
+    @State private var previousUnit: Int
+
+    private static let presets: [Int] = [0, 100, 256, 512, 1024, 5120, 10240, 51200, 102400, 1048576]
+
+    init(kbps: Binding<Int>) {
+        self._kbps = kbps
+        let unit = Self.unit(for: kbps.wrappedValue)
+        self._customUnit = State(initialValue: unit)
+        self._previousUnit = State(initialValue: unit)
+    }
+
+    private static func multiplier(_ unit: Int) -> Int { unit == 2 ? 1048576 : unit == 1 ? 1024 : 1 }
+
+    /// Largest unit that divides the value exactly, so entering custom
+    /// mode never changes the stored limit.
+    private static func unit(for value: Int) -> Int {
+        if value > 0, value % 1048576 == 0 { return 2 }
+        if value >= 1024, value % 1024 == 0 { return 1 }
+        return 0
+    }
+
+    private static func presetLabel(_ value: Int) -> String {
+        if value == 0 { return "Tanpa batas" }
+        if value == 1048576 { return "1 GB/s" }
+        if value >= 1024 { return "\(value / 1024) MB/s" }
+        return "\(value) KB/s"
+    }
+
+    private var presetSelection: Binding<Int> {
+        Binding(
+            get: { kbps == 0 || Self.presets.contains(kbps) ? kbps : -1 },
+            set: { new in
+                if new == -1 {
+                    let unit = Self.unit(for: kbps)
+                    customUnit = unit
+                    previousUnit = unit
+                } else {
+                    kbps = new
+                }
+            }
+        )
+    }
+
+    private var customValue: Binding<Int> {
+        let mult = Self.multiplier(customUnit)
+        return Binding(
+            get: { kbps / mult },
+            set: { kbps = min(max($0, 0), 1048576 / mult) * mult }
+        )
+    }
+
+    var body: some View {
+        Picker("Speed limit", selection: presetSelection) {
+            ForEach(Self.presets, id: \.self) { Text(Self.presetLabel($0)).tag($0) }
+            Text("Kustom…").tag(-1)
+        }
+        if presetSelection.wrappedValue == -1 {
+            IntField("Kecepatan kustom", value: customValue, in: 0...(1048576 / Self.multiplier(customUnit)))
+            Picker("Satuan", selection: $customUnit) {
+                Text("KB/s").tag(0); Text("MB/s").tag(1); Text("GB/s").tag(2)
+            }
+            .pickerStyle(.segmented)
+            .onChange(of: customUnit) { newUnit in
+                let display = kbps / Self.multiplier(previousUnit)
+                kbps = display * Self.multiplier(newUnit)
+                previousUnit = newUnit
+            }
+        }
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
@@ -82,7 +159,7 @@ struct SettingsView: View {
                     Picker("Max concurrent downloads", selection: $store.settings.maxConcurrentDownloads) {
                         ForEach(1...5, id: \.self) { Text("\($0)").tag($0) }
                     }
-                    IntField("Speed limit (KB/s, 0 = unlimited)", value: $store.settings.speedLimitKBps, in: 0...100000, suffix: "KB/s")
+                    SpeedLimitRow(kbps: $store.settings.speedLimitKBps)
                     Toggle("Start downloads paused", isOn: $store.settings.startPaused)
                     Toggle("Auto-resume on launch", isOn: $store.settings.autoResumeOnLaunch)
                     TextField("User-Agent", text: $store.settings.userAgent)
