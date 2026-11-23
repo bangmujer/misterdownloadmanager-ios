@@ -131,58 +131,395 @@ struct SettingsView: View {
 }
 
 // MARK: - Downloaded files
+// MARK: - My Files: WQFiles-style browser over the app's own sandbox
+//
+// Merged here (not a separate tab) because it IS the file browser: the same
+// Downloads folder, upgraded with WQFiles' Files-tool behaviour — folder
+// navigation, sort, in-folder search, largest files, favorites, Get Info,
+// Open As (text / plist / hex / SQLite), duplicate, compress, move, import,
+// and backups-before-delete with Recently Deleted. Cross-app containers,
+// the Apps manager and the cross-app Cache Cleaner are NOT here: they need
+// the worse_query sandbox technique (iOS 26–27.3 beta 1, patched in 27.3
+// beta 2), which cannot work on this app's iOS 16+ / TrollStore install.
+
+enum WQLocation: String, CaseIterable, Identifiable {
+    case downloads, documents, library, caches, tmp
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .downloads: return "Downloads"
+        case .documents: return "Documents"
+        case .library: return "Library"
+        case .caches: return "Caches"
+        case .tmp: return "tmp"
+        }
+    }
+    var url: URL {
+        let fm = FileManager.default
+        switch self {
+        case .downloads:
+            let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            let dir = docs.appendingPathComponent("Downloads", isDirectory: true)
+            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        case .documents:
+            return fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        case .library:
+            return fm.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+        case .caches:
+            return fm.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        case .tmp:
+            return fm.temporaryDirectory
+        }
+    }
+}
+
+enum WQSheet: Identifiable {
+    case info(URL), text(URL), plist(URL), hex(URL), sqlite(URL)
+    case backups, search(URL, String), largest(URL)
+    var id: String {
+        switch self {
+        case .info(let u): return "info-\(u.path)"
+        case .text(let u): return "text-\(u.path)"
+        case .plist(let u): return "plist-\(u.path)"
+        case .hex(let u): return "hex-\(u.path)"
+        case .sqlite(let u): return "sqlite-\(u.path)"
+        case .backups: return "backups"
+        case .search(let u, let q): return "search-\(u.path)-\(q)"
+        case .largest(let u): return "largest-\(u.path)"
+        }
+    }
+}
+
+@MainActor
+final class WQBrowserState: ObservableObject {
+    @Published var path: [URL] = []
+    @Published var location: WQLocation = .downloads
+    @Published var sort: WQSort = .name
+    @Published var ascending = true
+    @Published var searchText = ""
+    @Published var selection = Set<URL>()
+    @Published var moveItems: [URL]?
+    @Published var previewURL: URL?
+    @Published var sheet: WQSheet?
+    @Published var refreshTick = 0
+    @Published var renameTarget: URL?
+    @Published var renameText = ""
+    @Published var pendingDelete: URL?
+    @Published var pendingDeleteMany: [URL]?
+    @Published var pendingExtract: URL?
+    @Published var showCreateFolder = false
+    @Published var newFolderName = ""
+    @Published var showImporter = false
+    @Published var notice: String?
+
+    func bump() { refreshTick += 1 }
+    func currentDir(root: URL) -> URL { path.last ?? root }
+
+    func delete(_ url: URL) {
+        WQBackups.backup(url)
+        try? FileManager.default.removeItem(at: url)
+        bump()
+    }
+
+    func dedupedURL(in dir: URL, name: String) -> URL {
+        let base = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        var candidate = dir.appendingPathComponent(name)
+        var n = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            let numbered = ext.isEmpty ? "\(base) (\(n))" : "\(base) (\(n)).\(ext)"
+            candidate = dir.appendingPathComponent(numbered)
+            n += 1
+        }
+        return candidate
+    }
+}
+
 struct DownloadedFilesView: View {
     @EnvironmentObject var store: DownloadStore
-    @State private var previewURL: URL?
-    @State private var renameTarget: URL?
-    @State private var renameText = ""
+    @StateObject private var browser = WQBrowserState()
     var body: some View {
-        NavigationStack {
-            List {
-                if store.downloadedFiles().isEmpty {
-                    VStack(spacing: 8) {
-                        Image(systemName: "folder").font(.largeTitle).foregroundStyle(.secondary)
-                        Text("No files yet").font(.headline)
-                        Text("Completed downloads appear here.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    }.frame(maxWidth: .infinity).padding()
+        NavigationStack(path: $browser.path) {
+            WQDirView(dir: browser.location.url, root: browser.location.url, browser: browser)
+                .navigationDestination(for: URL.self) { dir in
+                    WQDirView(dir: dir, root: browser.location.url, browser: browser)
                 }
-                ForEach(store.downloadedFiles(), id: \.self) { url in
-                    HStack {
-                        Image(systemName: iconFor(url)).foregroundStyle(.tint)
-                        VStack(alignment: .leading) {
-                            Text(url.lastPathComponent).lineLimit(1)
-                            Text(fileSize(url)).font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button { previewURL = url } label: { Image(systemName: "eye") }
-                        ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
+        }
+        .quickLookPreview($browser.previewURL)
+        .sheet(item: $browser.sheet) { sheet in
+            switch sheet {
+            case .info(let u): WQGetInfoView(url: u)
+            case .text(let u): WQTextEditorView(url: u)
+            case .plist(let u): WQPlistEditorView(url: u)
+            case .hex(let u): WQHexEditorView(url: u)
+            case .sqlite(let u): WQSQLiteViewerView(url: u)
+            case .backups: WQBackupsView()
+            case .search(let dir, let q): WQSearchResultsView(root: dir, query: q)
+            case .largest(let dir): WQLargestFilesView(root: dir)
+            }
+        }
+        .alert("Ubah nama", isPresented: Binding(get: { browser.renameTarget != nil }, set: { if !$0 { browser.renameTarget = nil } })) {
+            TextField("Nama baru", text: $browser.renameText)
+            Button("Ubah") {
+                if let old = browser.renameTarget, !browser.renameText.isEmpty {
+                    let dest = old.deletingLastPathComponent().appendingPathComponent(browser.renameText)
+                    if !FileManager.default.fileExists(atPath: dest.path) {
+                        try? FileManager.default.moveItem(at: old, to: dest)
+                        browser.bump()
                     }
-                    .contextMenu {
-                        Button("Rename") { renameTarget = url; renameText = url.lastPathComponent }
-                        Button("Delete", role: .destructive) { store.deleteDownloadedFile(url) }
+                }
+                browser.renameTarget = nil
+            }
+            Button("Batal", role: .cancel) { browser.renameTarget = nil }
+        }
+        .alert("Buat folder", isPresented: $browser.showCreateFolder) {
+            TextField("Nama folder", text: $browser.newFolderName)
+            Button("Buat") {
+                if !browser.newFolderName.isEmpty {
+                    let dir = browser.currentDir(root: browser.location.url).appendingPathComponent(browser.newFolderName, isDirectory: true)
+                    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                    browser.bump()
+                }
+                browser.newFolderName = ""
+            }
+            Button("Batal", role: .cancel) { browser.newFolderName = "" }
+        }
+        .confirmationDialog("Hapus file ini? Salinannya dicadangkan dulu.", isPresented: Binding(get: { browser.pendingDelete != nil }, set: { if !$0 { browser.pendingDelete = nil } }), titleVisibility: .visible) {
+            Button("Hapus", role: .destructive) {
+                if let u = browser.pendingDelete { browser.delete(u) }
+                browser.pendingDelete = nil
+            }
+            Button("Batal", role: .cancel) { browser.pendingDelete = nil }
+        }
+        .confirmationDialog("Hapus \(browser.pendingDeleteMany?.count ?? 0) item? Salinannya dicadangkan dulu.", isPresented: Binding(get: { browser.pendingDeleteMany != nil }, set: { if !$0 { browser.pendingDeleteMany = nil } }), titleVisibility: .visible) {
+            Button("Hapus semua", role: .destructive) {
+                browser.pendingDeleteMany?.forEach { browser.delete($0) }
+                browser.pendingDeleteMany = nil
+                browser.selection.removeAll()
+            }
+            Button("Batal", role: .cancel) { browser.pendingDeleteMany = nil }
+        }
+        .confirmationDialog("Ekstrak ZIP ini ke folder baru?", isPresented: Binding(get: { browser.pendingExtract != nil }, set: { if !$0 { browser.pendingExtract = nil } }), titleVisibility: .visible) {
+            Button("Ekstrak") {
+                if let zip = browser.pendingExtract {
+                    let dest = browser.dedupedURL(in: zip.deletingLastPathComponent(), name: zip.deletingPathExtension().lastPathComponent)
+                    if (try? ArchiveExtractor.extract(zipURL: zip, to: dest)) != nil { browser.bump() }
+                    else { browser.notice = "Gagal mengekstrak ZIP." }
+                }
+                browser.pendingExtract = nil
+            }
+            Button("Batal", role: .cancel) { browser.pendingExtract = nil }
+        }
+        .alert("My Files", isPresented: Binding(get: { browser.notice != nil }, set: { if !$0 { browser.notice = nil } })) {
+            Button("OK", role: .cancel) { browser.notice = nil }
+        } message: { Text(browser.notice ?? "") }
+        .fileImporter(isPresented: $browser.showImporter, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            let dir = browser.currentDir(root: browser.location.url)
+            for url in urls {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                let dest = browser.dedupedURL(in: dir, name: url.lastPathComponent)
+                try? FileManager.default.copyItem(at: url, to: dest)
+            }
+            browser.bump()
+        }
+        .environmentObject(browser)
+    }
+}
+
+struct WQDirView: View {
+    let dir: URL
+    let root: URL
+    @ObservedObject var browser: WQBrowserState
+    @EnvironmentObject var store: DownloadStore
+
+    private var items: [URL] {
+        _ = browser.refreshTick
+        let contents = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey])) ?? []
+        let filtered = browser.searchText.isEmpty ? contents : contents.filter { $0.lastPathComponent.localizedCaseInsensitiveContains(browser.searchText) }
+        return wqSortContents(filtered, by: browser.sort, ascending: browser.ascending)
+    }
+    private var isRoot: Bool { dir == root }
+
+    var body: some View {
+        List(selection: $browser.selection) {
+            if isRoot {
+                let favorites = WQFavorites.all()
+                if !favorites.isEmpty {
+                    Section("Favorit") {
+                        ForEach(favorites, id: \.self) { fav in
+                            row(fav, isFavorite: true)
+                        }
                     }
                 }
             }
-            .navigationTitle("Downloaded Files")
-            .quickLookPreview($previewURL)
-            .alert("Rename file", isPresented: Binding(get: { renameTarget != nil }, set: { if !$0 { renameTarget = nil } })) {
-                TextField("New name", text: $renameText)
-                Button("Rename") {
-                    if let old = renameTarget, !renameText.isEmpty {
-                        try? FileManager.default.moveItem(at: old, to: old.deletingLastPathComponent().appendingPathComponent(renameText))
-                    }
-                    renameTarget = nil
+            if items.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "folder").font(.largeTitle).foregroundStyle(.secondary)
+                    Text("Folder kosong").font(.headline)
+                    Text("File hasil download dan file yang diimpor muncul di sini.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
-                Button("Cancel", role: .cancel) { renameTarget = nil }
+                .frame(maxWidth: .infinity).padding()
+            }
+            ForEach(items, id: \.self) { url in
+                row(url, isFavorite: false)
+            }
+        }
+        .navigationTitle(isRoot ? "My Files" : dir.lastPathComponent)
+        .searchable(text: $browser.searchText, prompt: "Cari di folder ini")
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) { EditButton() }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if !browser.selection.isEmpty {
+                    Menu("Pilihan (\(browser.selection.count))") {
+                        Button("Pindahkan…") {
+                            browser.moveItems = Array(browser.selection)
+                            browser.selection.removeAll()
+                        }
+                        Button("Kompres jadi ZIP") { compress(Array(browser.selection)) }
+                        Button("Hapus", role: .destructive) { browser.pendingDeleteMany = Array(browser.selection) }
+                    }
+                }
+                Menu {
+                    Picker("Urutkan", selection: $browser.sort) {
+                        ForEach(WQSort.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    Button(browser.ascending ? "Z ke A / Terbaru dulu" : "A ke Z / Terlama dulu") { browser.ascending.toggle() }
+                    Divider()
+                    Button("Cari di dalam folder…") { browser.sheet = .search(dir, browser.searchText) }
+                    Button("File terbesar") { browser.sheet = .largest(dir) }
+                    Divider()
+                    Button("Folder baru") { browser.showCreateFolder = true }
+                    Button("Impor file…") { browser.showImporter = true }
+                    Divider()
+                    Picker("Lokasi", selection: $browser.location) {
+                        ForEach(WQLocation.allCases) { Text($0.label).tag($0) }
+                    }
+                    Button("Cadangan & Baru dihapus") { browser.sheet = .backups }
+                } label: { Image(systemName: "ellipsis.circle") }
+            }
+        }
+        .onChange(of: browser.location) { _ in browser.path.removeAll() }
+        .safeAreaInset(edge: .bottom) {
+            if let moving = browser.moveItems {
+                HStack {
+                    Text("Pindahkan \(moving.count) item ke folder ini?")
+                    Spacer()
+                    Button("Pindahkan") { moveHere(moving, to: dir) }
+                        .buttonStyle(.borderedProminent)
+                    Button("Batal", role: .cancel) { browser.moveItems = nil }
+                }
+                .padding()
+                .background(.thinMaterial)
             }
         }
     }
+
+    private func row(_ url: URL, isFavorite: Bool) -> some View {
+        let isDir = wqIsDirectory(url)
+        return Group {
+            if isDir {
+                NavigationLink(value: url) {
+                    rowLabel(url, isDir: true)
+                }
+            } else {
+                Button { openDefault(url) } label: { rowLabel(url, isDir: false) }
+            }
+        }
+        .contextMenu {
+            if !isDir {
+                Button("Buka sebagai Teks") { browser.sheet = .text(url) }
+                Button("Buka sebagai Plist") { browser.sheet = .plist(url) }
+                Button("Buka sebagai Hex") { browser.sheet = .hex(url) }
+                Button("Buka sebagai SQLite") { browser.sheet = .sqlite(url) }
+                Button("Pratinjau") { browser.previewURL = url }
+            }
+            Button("Info") { browser.sheet = .info(url) }
+            Button(WQFavorites.contains(url) ? "Hapus dari Favorit" : "Tambah ke Favorit") {
+                WQFavorites.toggle(url)
+                browser.bump()
+            }
+            if !isDir {
+                ShareLink(item: url) { Text("Bagikan") }
+                Button("Duplikat") { duplicate(url) }
+                Button("Kompres jadi ZIP") { compress([url]) }
+                if ArchiveExtractor.isSupportedArchive(url.lastPathComponent) {
+                    Button("Ekstrak di sini") { browser.pendingExtract = url }
+                }
+            }
+            Button("Ubah nama") { browser.renameTarget = url; browser.renameText = url.lastPathComponent }
+            Button("Hapus", role: .destructive) { browser.pendingDelete = url }
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button("Hapus", role: .destructive) { browser.pendingDelete = url }
+        }
+    }
+
+    private func rowLabel(_ url: URL, isDir: Bool) -> some View {
+        HStack {
+            Image(systemName: isDir ? "folder.fill" : iconFor(url)).foregroundStyle(.tint)
+            VStack(alignment: .leading) {
+                Text(url.lastPathComponent).lineLimit(1)
+                Text(isDir ? "Folder" : fileSize(url)).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if !isDir {
+                Button { browser.previewURL = url } label: { Image(systemName: "eye") }.buttonStyle(.plain)
+                ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }.buttonStyle(.plain)
+            }
+        }
+    }
+
     private func iconFor(_ url: URL) -> String {
         DownloadCategory.from(fileName: url.lastPathComponent, mime: nil).systemImage
     }
+
     private func fileSize(_ url: URL) -> String {
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
-        return formatBytes(size)
+        formatBytes(wqFileSize(url))
+    }
+
+    private func openDefault(_ url: URL) {
+        switch url.pathExtension.lowercased() {
+        case "plist": browser.sheet = .plist(url)
+        case "db", "sqlite", "sqlite3": browser.sheet = .sqlite(url)
+        case "txt", "md", "json", "js", "ts", "swift", "xml", "yaml", "yml", "toml", "ini", "css", "html", "csv", "log", "py", "sh", "c", "h", "m", "java", "kt", "go", "rs", "rb", "lua", "sql":
+            browser.sheet = .text(url)
+        case "zip": browser.pendingExtract = url
+        default: browser.previewURL = url
+        }
+    }
+
+    private func duplicate(_ url: URL) {
+        let dest = browser.dedupedURL(in: url.deletingLastPathComponent(), name: url.lastPathComponent)
+        try? FileManager.default.copyItem(at: url, to: dest)
+        browser.bump()
+    }
+
+    private func compress(_ urls: [URL]) {
+        guard let first = urls.first else { return }
+        let dir = first.deletingLastPathComponent()
+        let zipName = (urls.count == 1 ? first.deletingPathExtension().lastPathComponent : "Arsip") + ".zip"
+        let dest = browser.dedupedURL(in: dir, name: zipName)
+        do {
+            try WQZip.compress(urls, to: dest)
+            browser.bump()
+        } catch {
+            browser.notice = "Gagal membuat ZIP: \(error.localizedDescription)"
+        }
+    }
+
+    private func moveHere(_ items: [URL], to dir: URL) {
+        var skipped = 0
+        for item in items {
+            let dest = dir.appendingPathComponent(item.lastPathComponent)
+            if FileManager.default.fileExists(atPath: dest.path) { skipped += 1; continue }
+            try? FileManager.default.moveItem(at: item, to: dest)
+        }
+        browser.moveItems = nil
+        browser.bump()
+        if skipped > 0 { browser.notice = "\(skipped) item dilewati karena namanya sudah ada di folder tujuan (tidak pernah ditimpa)." }
     }
 }
 
