@@ -3902,6 +3902,43 @@ struct InactiveTabsView: View {
 
 // MARK: - AdBlock panel (built-in + custom together, allowlist wins)
 
+/// UIKit document picker with an explicit delegate. The SwiftUI
+/// `.fileImporter` wrapper silently dropped selections when presented
+/// from the settings sheet: taps on a file did nothing at all, even
+/// with [.item] content types. Presenting the picker directly from
+/// the top view controller sidesteps the wrapper entirely.
+private final class ScriptPickerPresenter: NSObject, UIDocumentPickerDelegate {
+    private var onPick: ((Result<[URL], Error>) -> Void)?
+
+    func present(onPick: @escaping (Result<[URL], Error>) -> Void) {
+        self.onPick = onPick
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
+        picker.delegate = self
+        picker.allowsMultipleSelection = false
+        Self.topViewController()?.present(picker, animated: true)
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        let pick = onPick
+        onPick = nil
+        controller.dismiss(animated: true)
+        pick?(.success(urls))
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        onPick = nil
+        controller.dismiss(animated: true)
+    }
+
+    private static func topViewController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let window = scenes.flatMap({ $0.windows }).first(where: { $0.isKeyWindow }) else { return nil }
+        var top = window.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        return top
+    }
+}
+
 struct AdBlockPanelView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
@@ -3909,7 +3946,7 @@ struct AdBlockPanelView: View {
     @State private var allowText = ""
     @State private var showingNewExtension = false
     @State private var editingExtension: BrowserExtension?
-    @State private var showingScriptImporter = false
+    @State private var pickerPresenter = ScriptPickerPresenter()
     @State private var scriptImportResult: String?
     @State private var exceptionText = ""
     @State private var freezeText = ""
@@ -3967,7 +4004,7 @@ struct AdBlockPanelView: View {
                     }
                     .onDelete { store.browserSettings.extensions.remove(atOffsets: $0) }
                     Button("Add extension…") { showingNewExtension = true }
-                    Button("Impor file .js…") { showingScriptImporter = true }
+                    Button("Impor file .js…") { pickerPresenter.present { importScript(from: $0) } }
                     if let scriptImportResult {
                         Text(scriptImportResult).font(.caption).foregroundStyle(.secondary)
                     }
@@ -4066,17 +4103,8 @@ struct AdBlockPanelView: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { store.saveBrowserSettings(); dismiss() } } }
             .sheet(isPresented: $showingNewExtension) { NewExtensionView() }
             .sheet(item: $editingExtension) { ext in EditExtensionView(ext: ext) }
-            .fileImporter(isPresented: $showingScriptImporter, allowedContentTypes: Self.scriptImportTypes, allowsMultipleSelection: false) { result in
-                importScript(from: result)
-            }
         }
     }
-
-    /// The picker accepts every file type (.item): .js files arrive
-    /// with varying UTIs depending on the app that saved them, and a
-    /// narrow type list greys the file out so it cannot be picked at
-    /// all. The handler below validates the contents as text instead.
-    private static var scriptImportTypes: [UTType] { [.item] }
 
     private func importScript(from result: Result<[URL], Error>) {
         guard let url = try? result.get().first else { return }
