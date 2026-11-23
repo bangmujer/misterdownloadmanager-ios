@@ -630,6 +630,27 @@ final class BrowserSession: ObservableObject {
     // Latest settings, kept in sync by applyRulesAndScripts, for delegate
     // callbacks that do not receive the view's settings value.
     var latestSettings = BrowserSettings()
+    // Bottom scroll padding for every web view, so the last row of a page
+    // can scroll fully above the floating navbar + tab bar while the page
+    // itself still paints to the physical bottom edge (visible through the
+    // translucent chrome). Set from the browser view's GeometryReader:
+    // real bottom safe-area inset + navbar lift + navbar height.
+    var bottomScrollInset: CGFloat = 120 {
+        didSet { applyScrollInsets() }
+    }
+
+    func applyScrollInsets() {
+        for webView in webViews.values {
+            // The root ignores the bottom safe area, so the system would
+            // reset the bottom inset to zero on every safe-area update and
+            // the final rows would hide behind the navbar again. Own the
+            // insets instead; the top still follows the real safe area.
+            let top = webView.safeAreaInsets.top
+            webView.scrollView.contentInsetAdjustmentBehavior = .never
+            webView.scrollView.contentInset = UIEdgeInsets(top: top, left: 0, bottom: bottomScrollInset, right: 0)
+            webView.scrollView.verticalScrollIndicatorInsets = UIEdgeInsets(top: top, left: 0, bottom: bottomScrollInset, right: 0)
+        }
+    }
     // History recording (set by the browser view; skipped for private tabs).
     var onHistoryRecord: ((String, String) -> Void)?
     private var lastHistoryURL: [UUID: String] = [:]
@@ -1809,6 +1830,7 @@ struct BrowserWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        session.applyScrollInsets()
         // Gesture toggles apply live (Reynard-style individual toggles).
         webView.allowsBackForwardNavigationGestures = settings.gestureEdgeSwipe
         if settings.gesturePullRefresh {
@@ -1845,6 +1867,7 @@ struct BrowserWebView: UIViewRepresentable {
 
         func observe(webView: WKWebView) {
             self.webView = webView
+            session.applyScrollInsets()
             // Correct any stale tab state left by a previous coordinator
             // (e.g. isLoading stuck true) right away.
             session.updateTab(id: tabID, title: webView.title, urlString: webView.url?.absoluteString,
@@ -2434,7 +2457,12 @@ struct BrowserView: View {
                     StartPageView(session: session, onOpenShield: { showingAdBlock = true })
                 }
             }
-            .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 76) }
+            // No bottom safe-area inset here on purpose: the page must
+            // paint to the physical bottom edge so its content shows
+            // through the translucent tab bar. Scroll clearance for the
+            // navbar comes from the web view's own scroll insets
+            // (see applyScrollInsets), which pad scrolling without
+            // shrinking the layout viewport.
             VStack(spacing: 8) {
                 if showingFind { findBar }
                 // Floating DevTools button (DevSnoop-style): only when
@@ -2488,6 +2516,9 @@ struct BrowserView: View {
             }
         }
         .onAppear {
+            // Chrome height for scroll clearance: the same bottom inset
+            // the navbar is lifted by, plus its lift and height.
+            session.bottomScrollInset = geo.safeAreaInsets.bottom + 66
             session.onDownloadCaptured = { url in
                 let item = store.addItem(urlString: url.absoluteString)
                 capturedNotice = item == nil ? "Link captured, but the URL was rejected." : "Download added: \(item?.fileName ?? url.lastPathComponent)"
@@ -2570,6 +2601,7 @@ struct BrowserView: View {
             session.autofillOffer = nil
             showingAutofillPicker = false
         }
+        .onChange(of: geo.safeAreaInsets.bottom) { session.bottomScrollInset = $0 + 66 }
         .onDisappear { session.saveTabs() }
         .sheet(isPresented: $showingAdBlock) {
             AdBlockPanelView()
