@@ -464,6 +464,9 @@ struct WQDirView: View {
                 Button("Buka sebagai SQLite") { browser.sheet = .sqlite(url) }
                 Button("Pratinjau") { browser.previewURL = url }
             }
+            if ["js", "mjs", "txt"].contains(url.pathExtension.lowercased()) {
+                Button("Impor sebagai userscript") { importAsUserscript(url) }
+            }
             Button("Info") { browser.sheet = .info(url) }
             Button(WQFavorites.contains(url) ? "Hapus dari Favorit" : "Tambah ke Favorit") {
                 WQFavorites.toggle(url)
@@ -483,6 +486,18 @@ struct WQDirView: View {
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button("Hapus", role: .destructive) { browser.pendingDelete = url }
         }
+    }
+
+    /// Imports a script file already in My Files as a browser userscript,
+    /// without going through the document picker.
+    private func importAsUserscript(_ url: URL) {
+        guard let data = try? Data(contentsOf: url),
+              let source = BrowserExtension.decodeScript(data),
+              !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            browser.notice = "File kosong atau bukan teks."
+            return
+        }
+        browser.notice = store.importUserscript(source: source, fileName: url.lastPathComponent)
     }
 
     private func rowLabel(_ url: URL, isDir: Bool) -> some View {

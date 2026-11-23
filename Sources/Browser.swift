@@ -34,6 +34,89 @@ struct BrowserExtension: Identifiable, Codable, Equatable {
     var source: String
     var enabled: Bool
     var atDocumentStart: Bool = false
+    /// @match/@include patterns from the userscript header. Empty means
+    /// the script runs on every page (the old behaviour, kept for the
+    /// builtins and hand-written extensions).
+    var matches: [String] = []
+    /// @exclude patterns: pages matching one never run the script.
+    var excludes: [String] = []
+
+    /// Tampermonkey-style @match glob: scheme/host/path with `*`
+    /// wildcards; `*.host` matches the host and its subdomains.
+    static func patternMatches(_ pattern: String, url: URL) -> Bool {
+        let p = pattern.trimmingCharacters(in: .whitespaces)
+        if p == "<all_urls>" { return true }
+        guard let schemeEnd = p.range(of: "://") else { return false }
+        let scheme = String(p[..<schemeEnd.lowerBound]).lowercased()
+        let rest = String(p[schemeEnd.upperBound...])
+        guard let slash = rest.firstIndex(of: "/") else { return false }
+        let hostPart = String(rest[..<slash]).lowercased()
+        let pathPart = String(rest[slash...])
+        if scheme != "*" && scheme != (url.scheme ?? "").lowercased() { return false }
+        let host = (url.host ?? "").lowercased()
+        if hostPart != "*" {
+            if hostPart.hasPrefix("*.") {
+                let base = String(hostPart.dropFirst(2))
+                if host != base && !host.hasSuffix("." + base) { return false }
+            } else if host != hostPart { return false }
+        }
+        let escaped = NSRegularExpression.escapedPattern(for: pathPart).replacingOccurrences(of: "\\*", with: ".*")
+        guard let regex = try? NSRegularExpression(pattern: "^" + escaped + "$") else { return false }
+        let path = url.path.isEmpty ? "/" : url.path
+        let full = path + (url.query.map { "?" + $0 } ?? "")
+        return regex.firstMatch(in: full, range: NSRange(full.startIndex..., in: full)) != nil
+    }
+
+    /// Whether this script runs on a page. With no URL yet (fresh tab)
+    /// only match-less scripts run; the page gets re-checked on every
+    /// navigation commit.
+    func runs(on url: URL?) -> Bool {
+        guard let url else { return matches.isEmpty && excludes.isEmpty }
+        if excludes.contains(where: { Self.patternMatches($0, url: url) }) { return false }
+        if matches.isEmpty { return true }
+        return matches.contains(where: { Self.patternMatches($0, url: url) })
+    }
+
+    /// Decodes script bytes, tolerating UTF-16/Latin-1 files and a BOM,
+    /// which some editors (notably on Windows) produce.
+    static func decodeScript(_ data: Data) -> String? {
+        for encoding in [String.Encoding.utf8, .utf16, .isoLatin1] {
+            if var text = String(data: data, encoding: encoding) {
+                if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
+                return text
+            }
+        }
+        return nil
+    }
+
+    /// Userscript metadata block (// ==UserScript== … // ==/UserScript==):
+    /// @name becomes the extension name, @run-at document-start picks
+    /// "Awal dokumen" timing, @match/@include limit the pages, @exclude
+    /// removes pages.
+    static func userscriptMeta(_ source: String) -> (name: String?, atStart: Bool, matches: [String], excludes: [String]) {
+        var name: String?
+        var atStart = false
+        var matches: [String] = []
+        var excludes: [String] = []
+        for line in source.components(separatedBy: .newlines).prefix(50) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t == "// ==/UserScript==" { break }
+            guard t.hasPrefix("//") else { continue }
+            let body = t.dropFirst(2).trimmingCharacters(in: .whitespaces)
+            // Split "@key value" on the first whitespace, so "@namespace"
+            // is never mistaken for "@name" (the old prefix check did).
+            let parts = body.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
+            guard parts.count == 2 else { continue }
+            switch parts[0] {
+            case "@name": name = String(parts[1])
+            case "@run-at": atStart = parts[1].lowercased().contains("document-start")
+            case "@match", "@include": matches.append(String(parts[1]))
+            case "@exclude": excludes.append(String(parts[1]))
+            default: break
+            }
+        }
+        return (name, atStart, matches, excludes)
+    }
 
     static let builtins: [BrowserExtension] = [
         BrowserExtension(
@@ -849,7 +932,7 @@ final class BrowserSession: ObservableObject {
         let compat = isCompatHost(webView.url?.host)
         if !compat {
             for list in lists { ucc.add(list) }
-                    for ext in settings.extensions where ext.enabled {
+                    for ext in settings.extensions where ext.enabled && ext.runs(on: webView.url) {
                         ucc.addUserScript(WKUserScript(
                             source: ext.source,
                             injectionTime: ext.atDocumentStart ? .atDocumentStart : .atDocumentEnd,
@@ -3866,6 +3949,10 @@ struct AdBlockPanelView: View {
                     ForEach($store.browserSettings.extensions) { $ext in
                         VStack(alignment: .leading, spacing: 8) {
                             Toggle(ext.name, isOn: $ext.enabled)
+                            if !ext.matches.isEmpty {
+                                Text("Hanya: " + ext.matches.joined(separator: ", "))
+                                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            }
                             HStack(spacing: 8) {
                                 Picker("Jalankan", selection: $ext.atDocumentStart) {
                                     Text("Akhir dokumen").tag(false)
@@ -3985,28 +4072,11 @@ struct AdBlockPanelView: View {
         }
     }
 
-    /// Accepted types for .js import: JavaScript, plain text, source
-    /// code, plus whatever the system maps the .js extension to, so a
-    /// script file is never greyed out in the picker.
-    private static var scriptImportTypes: [UTType] {
-        var types: [UTType] = [.javaScript, .plainText, .sourceCode]
-        if let js = UTType(tag: "js", tagClass: .filenameExtension, conformingTo: .sourceCode) {
-            types.append(js)
-        }
-        return types
-    }
-
-    /// Decodes script bytes, tolerating UTF-16/Latin-1 files and a BOM,
-    /// which some editors (notably on Windows) produce.
-    private static func decodeScript(_ data: Data) -> String? {
-        for encoding in [String.Encoding.utf8, .utf16, .isoLatin1] {
-            if var text = String(data: data, encoding: encoding) {
-                if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
-                return text
-            }
-        }
-        return nil
-    }
+    /// The picker accepts every file type (.item): .js files arrive
+    /// with varying UTIs depending on the app that saved them, and a
+    /// narrow type list greys the file out so it cannot be picked at
+    /// all. The handler below validates the contents as text instead.
+    private static var scriptImportTypes: [UTType] { [.item] }
 
     private func importScript(from result: Result<[URL], Error>) {
         guard let url = try? result.get().first else { return }
@@ -4016,42 +4086,12 @@ struct AdBlockPanelView: View {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url),
-              let source = Self.decodeScript(data),
+              let source = BrowserExtension.decodeScript(data),
               !source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             scriptImportResult = "File kosong atau bukan teks."
             return
         }
-        let meta = Self.userscriptMeta(source)
-        var base = url.deletingPathExtension().lastPathComponent
-        if base.hasSuffix(".user") { base = String(base.dropLast(5)) }
-        let name = meta.name ?? (base.isEmpty ? "Userscript" : base)
-        store.browserSettings.extensions.append(BrowserExtension(name: name, source: source, enabled: true, atDocumentStart: meta.atStart))
-        store.saveBrowserSettings()
-        scriptImportResult = "\"\(name)\" diimpor\(meta.atStart ? " (awal dokumen)" : "")."
-    }
-
-    /// Userscript metadata block (// ==UserScript== … // ==/UserScript==):
-    /// @name becomes the extension name, @run-at document-start picks
-    /// "Awal dokumen" timing.
-    static func userscriptMeta(_ source: String) -> (name: String?, atStart: Bool) {
-        var name: String?
-        var atStart = false
-        for line in source.components(separatedBy: .newlines).prefix(50) {
-            let t = line.trimmingCharacters(in: .whitespaces)
-            if t == "// ==/UserScript==" { break }
-            guard t.hasPrefix("//") else { continue }
-            let body = t.dropFirst(2).trimmingCharacters(in: .whitespaces)
-            // Split "@key value" on the first whitespace, so "@namespace"
-            // is never mistaken for "@name" (the old prefix check did).
-            let parts = body.split(maxSplits: 1, omittingEmptySubsequences: true, whereSeparator: { $0.isWhitespace })
-            guard parts.count == 2 else { continue }
-            switch parts[0] {
-            case "@name": name = String(parts[1])
-            case "@run-at": atStart = parts[1].lowercased().contains("document-start")
-            default: break
-            }
-        }
-        return (name, atStart)
+        scriptImportResult = store.importUserscript(source: source, fileName: url.lastPathComponent)
     }
 }
 

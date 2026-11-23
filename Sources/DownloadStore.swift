@@ -61,6 +61,22 @@ final class DownloadStore: ObservableObject {
         browserSettings = decoded
     }
 
+    /// Adds pasted/imported JS source as an extension, honouring the
+    /// userscript metadata block (@name, @run-at, @match/@include,
+    /// @exclude). Returns the message to show the user.
+    @discardableResult
+    func importUserscript(source: String, fileName: String) -> String {
+        let meta = BrowserExtension.userscriptMeta(source)
+        var base = (fileName as NSString).deletingPathExtension
+        if base.hasSuffix(".user") { base = String(base.dropLast(5)) }
+        let name = meta.name ?? (base.isEmpty ? "Userscript" : base)
+        browserSettings.extensions.append(BrowserExtension(name: name, source: source, enabled: true, atDocumentStart: meta.atStart, matches: meta.matches, excludes: meta.excludes))
+        saveBrowserSettings()
+        var message = "\"\(name)\" diimpor\(meta.atStart ? " (awal dokumen)" : "")"
+        if !meta.matches.isEmpty { message += " — hanya: \(meta.matches.joined(separator: ", "))" }
+        return message
+    }
+
     // MARK: - Browser history
 
     private var browserHistoryURL: URL {
