@@ -2565,7 +2565,7 @@ struct BrowserView: View {
         .onChange(of: scenePhase) { phase in
             if phase != .active { session.saveTabs() }
         }
-        .onChange(of: session.selectedID) {
+        .onChange(of: session.selectedID) { _ in
             session.pendingSavePrompt = nil
             session.autofillOffer = nil
             showingAutofillPicker = false
