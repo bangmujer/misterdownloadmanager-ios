@@ -4873,8 +4873,8 @@ struct TabCardView: View {
 /// groups them. The drop target is highlighted while the drag hovers.
 struct TabDropDelegate: DropDelegate {
     var targetID: UUID
-    var onDropTab: (UUID) -> Void
     @Binding var dropTargetID: UUID?
+    var onDropTab: (UUID) -> Void
 
     func dropEntered(info: DropInfo) { dropTargetID = targetID }
     func dropExited(info: DropInfo) { if dropTargetID == targetID { dropTargetID = nil } }
