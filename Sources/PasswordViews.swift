@@ -14,6 +14,10 @@ struct LoginGroup: Identifiable {
 
 struct PasswordsView: View {
     @EnvironmentObject var store: DownloadStore
+    /// Set when the list is opened from the browser: tapping a login
+    /// fills it into the open page (after Face ID). Nil from Settings,
+    /// where there is no page to fill.
+    var onFill: ((SavedLogin) -> Void)? = nil
     @State private var query = ""
     @State private var showingAdd = false
     @State private var editing: SavedLogin?
@@ -24,7 +28,9 @@ struct PasswordsView: View {
             q.isEmpty || login.host.localizedCaseInsensitiveContains(q)
                 || login.username.localizedCaseInsensitiveContains(q)
         }
-        let dict = Dictionary(grouping: all, by: \.host)
+        // Group by the normalized host so an older entry saved as a full
+        // URL sits under the same clean heading as the page it fills.
+        let dict = Dictionary(grouping: all, by: { PasswordStore.normalizeHost($0.host) })
         return dict.keys.sorted().map { host in
             LoginGroup(host: host, logins: (dict[host] ?? []).sorted { $0.username < $1.username })
         }
@@ -44,7 +50,7 @@ struct PasswordsView: View {
                 Section(group.host) {
                     ForEach(group.logins) { login in
                         NavigationLink {
-                            PasswordDetailView(login: login)
+                            PasswordDetailView(login: login, onFill: onFill)
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(login.username.isEmpty ? "(tanpa nama pengguna)" : login.username)
@@ -88,6 +94,7 @@ struct PasswordDetailView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
     var login: SavedLogin
+    var onFill: ((SavedLogin) -> Void)? = nil
 
     @State private var revealedPassword: String?
     @State private var authError: String?
@@ -100,8 +107,20 @@ struct PasswordDetailView: View {
         // the edit sheet without navigating back to the list first.
         let current = store.passwords.logins.first { $0.id == login.id } ?? login
         return Form {
+            if let onFill {
+                Section {
+                    Button {
+                        onFill(current)
+                        dismiss()
+                    } label: {
+                        Label("Isi otomatis di halaman ini", systemImage: "key.fill")
+                    }
+                    Text("Meminta Face ID, lalu mengisi kolom login di halaman yang sedang dibuka.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section("Situs") {
-                LabeledContent("Situs", value: current.host)
+                LabeledContent("Situs", value: PasswordStore.normalizeHost(current.host))
                 HStack {
                     LabeledContent("Nama pengguna", value: current.username.isEmpty ? "(tanpa nama pengguna)" : current.username)
                     Spacer()
@@ -148,7 +167,7 @@ struct PasswordDetailView: View {
                 Button("Hapus login ini", role: .destructive) { showingDeleteConfirm = true }
             }
         }
-        .navigationTitle(current.host)
+        .navigationTitle(PasswordStore.normalizeHost(current.host))
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog("Hapus login ini?", isPresented: $showingDeleteConfirm, titleVisibility: .visible) {
             Button("Hapus", role: .destructive) {

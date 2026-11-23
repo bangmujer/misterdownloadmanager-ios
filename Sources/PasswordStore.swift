@@ -94,7 +94,9 @@ final class PasswordStore: ObservableObject {
     /// Insert or update the login for a (host, username) pair.
     func save(host: String, username: String, password: String) {
         let host = Self.normalizeHost(host)
-        if let idx = logins.firstIndex(where: { $0.host == host && $0.username == username }) {
+        if let idx = logins.firstIndex(where: { Self.normalizeHost($0.host) == host && $0.username == username }) {
+            // Heal an older entry whose stored host was a full URL.
+            logins[idx].host = host
             logins[idx].updatedAt = Date()
             Self.keychainSave(account: logins[idx].id.uuidString, value: password)
         } else {
@@ -128,12 +130,31 @@ final class PasswordStore: ObservableObject {
 
     static func normalizeHost(_ host: String) -> String {
         var h = host.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !h.isEmpty else { return h }
+        // A full URL pasted as the host (http://10.128.4.218:5000/inspection/)
+        // must reduce to its bare host, or it will never match the page
+        // that reported location.hostname.
+        if let url = URL(string: h), let urlHost = url.host, !urlHost.isEmpty {
+            h = urlHost
+        } else {
+            if let schemeRange = h.range(of: "://") { h = String(h[schemeRange.upperBound...]) }
+            let cut = [Character("?"), "#", "/"].compactMap { h.firstIndex(of: $0) }.min()
+            if let cut { h = String(h[..<cut]) }
+            if let at = h.lastIndex(of: "@") { h = String(h[h.index(after: at)...]) }
+            if let colon = h.firstIndex(of: ":") { h = String(h[..<colon]) }
+        }
         if h.hasPrefix("www.") { h = String(h.dropFirst(4)) }
+        if h.hasSuffix(".") { h = String(h.dropLast()) }
         return h
     }
 
     static func hostMatches(page: String, saved: String) -> Bool {
-        page == saved || page.hasSuffix("." + saved) || saved.hasSuffix("." + page)
+        // Normalize both sides: entries saved by older builds may hold a
+        // full URL as the host, and they must still match their page.
+        let page = normalizeHost(page)
+        let saved = normalizeHost(saved)
+        guard !page.isEmpty, !saved.isEmpty else { return false }
+        return page == saved || page.hasSuffix("." + saved) || saved.hasSuffix("." + page)
     }
 
     // MARK: - Metadata persistence
@@ -223,6 +244,12 @@ final class PasswordStore: ObservableObject {
       }
       if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', reportDetected); } else { reportDetected(); }
       setTimeout(reportDetected, 1500);
+      // Re-check when the user taps into a login field: forms rendered
+      // late by JavaScript miss the load-time checks above.
+      document.addEventListener('focusin', function(e) {
+        var t = e.target;
+        if (t && (t.type === 'password' || t.type === 'text' || t.type === 'email' || t.type === 'tel')) reportDetected();
+      }, true);
       document.addEventListener('submit', function() { setTimeout(postSubmitted, 60); }, true);
       document.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && e.target && e.target.type === 'password') setTimeout(postSubmitted, 60);

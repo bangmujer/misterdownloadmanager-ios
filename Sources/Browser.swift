@@ -2552,7 +2552,7 @@ struct BrowserView: View {
                       let password = body["password"] as? String, !password.isEmpty else { return }
                 let key = "\(host)\n\(username)\n\(password)"
                 guard !session.declinedSaveKeys.contains(key) else { return }
-                if let existing = store.passwords.logins.first(where: { $0.host == host && $0.username == username }),
+                if let existing = store.passwords.logins.first(where: { PasswordStore.normalizeHost($0.host) == host && $0.username == username }),
                    store.passwords.password(for: existing) == password { return }
                 if let prompt = session.pendingSavePrompt,
                    prompt.host == host, prompt.username == username, prompt.password == password { return }
@@ -2609,7 +2609,13 @@ struct BrowserView: View {
         }
         .sheet(isPresented: $showingPasswords) {
             NavigationStack {
-                PasswordsView()
+                PasswordsView(onFill: { login in
+                    showingPasswords = false
+                    Task {
+                        guard await BiometricAuth.authenticate(reason: "Isi login tersimpan untuk \(login.host)") else { return }
+                        fillLogin(login)
+                    }
+                })
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Selesai") { showingPasswords = false } } }
             }
         }
