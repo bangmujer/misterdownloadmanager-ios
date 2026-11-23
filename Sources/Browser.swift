@@ -1228,6 +1228,14 @@ final class BrowserSession: ObservableObject {
   var DEAD_PX = 'data-mdm-dead-px';
   var ORIG_BG = 'data-mdm-orig-bg';
   var ORIG_SHADOW = 'data-mdm-orig-shadow';
+  var ORIG_GLASS = 'data-mdm-glass';
+  var ORIG_BF = 'data-mdm-orig-bf';
+  var ORIG_WBF = 'data-mdm-orig-wbf';
+  var ORIG_BORDER = 'data-mdm-orig-bordertop';
+  var ORIG_RADIUS = 'data-mdm-orig-radius';
+  var ORIG_LEFT = 'data-mdm-orig-left';
+  var ORIG_RIGHT = 'data-mdm-orig-right';
+  var ORIG_WIDTH = 'data-mdm-orig-width';
   var lifted = [];
   var scheduled = false;
   var lastApply = 0;
@@ -1360,6 +1368,49 @@ final class BrowserSession: ObservableObject {
     if (parts.length > 3) return parseFloat(parts[3]) || 0;
     return 1;
   }
+  // YouTube's pivot bar gets liquid-glass treatment (iOS 26 style
+  // floating tab bar) instead of a fully transparent background: a
+  // translucent tint plus backdrop blur, floating as a rounded pill.
+  // Other sites keep the transparent treatment.
+  function isGlassBar(el) {
+    try {
+      var host = window.location.hostname || '';
+      if (host.indexOf('youtube.com') >= 0 || host.indexOf('youtu.be') >= 0) return true;
+      var tag = (el.tagName || '').toLowerCase();
+      if (tag.indexOf('pivot') >= 0) return true;
+    } catch (e) {}
+    return false;
+  }
+  function isDarkPage() {
+    try {
+      if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return true;
+      if (document.documentElement && document.documentElement.hasAttribute('dark')) return true;
+    } catch (e) {}
+    return false;
+  }
+  function applyGlassBar(el) {
+    if (el.hasAttribute(ORIG_GLASS)) return;
+    el.setAttribute(ORIG_BG, el.style.background || '');
+    el.setAttribute(ORIG_SHADOW, el.style.boxShadow || '');
+    el.setAttribute(ORIG_BF, el.style.backdropFilter || '');
+    el.setAttribute(ORIG_WBF, el.style.webkitBackdropFilter || '');
+    el.setAttribute(ORIG_BORDER, el.style.borderTop || '');
+    el.setAttribute(ORIG_RADIUS, el.style.borderRadius || '');
+    el.setAttribute(ORIG_LEFT, el.style.left || '');
+    el.setAttribute(ORIG_RIGHT, el.style.right || '');
+    el.setAttribute(ORIG_WIDTH, el.style.width || '');
+    el.setAttribute(ORIG_GLASS, '1');
+    el.style.background = isDarkPage() ? 'rgba(28,28,30,0.55)' : 'rgba(255,255,255,0.55)';
+    el.style.backdropFilter = 'blur(22px) saturate(180%)';
+    el.style.webkitBackdropFilter = 'blur(22px) saturate(180%)';
+    el.style.boxShadow = '0 -0.5px 0 rgba(127,127,127,0.35), 0 10px 30px rgba(0,0,0,0.14)';
+    el.style.borderTop = 'none';
+    el.style.borderRadius = '24px';
+    el.style.left = '10px';
+    el.style.right = '10px';
+    el.style.width = 'auto';
+    log('glass bar ' + describe(el));
+  }
   // The white band behind a lifted bar is the bar's own opaque
   // background (or a full-width inner layer's). Clear it so the page
   // shows through behind the icons, like the floating glass pill.
@@ -1368,6 +1419,8 @@ final class BrowserSession: ObservableObject {
   // element so restore() puts them back.
   function clearBarBackground(el, z) {
     if (el.hasAttribute(ORIG_BG)) return;
+    var glass = isGlassBar(el);
+    if (glass) applyGlassBar(el);
     var barRect = cssRect(el, z);
     var targets = [el];
     var all = el.querySelectorAll('*');
@@ -1378,20 +1431,64 @@ final class BrowserSession: ObservableObject {
       var r = cssRect(c, z);
       if (r.width >= barRect.width * 0.85 && r.height >= barRect.height * 0.5) targets.push(c);
     }
-    for (var j = 0; j < targets.length; j++) {
+    // Glass bars keep their own glass fill: only the inner full-span
+    // layers go transparent so the blur shows through.
+    var start = glass ? 1 : 0;
+    for (var j = start; j < targets.length; j++) {
       var t = targets[j];
       t.setAttribute(ORIG_BG, t.style.background || '');
       t.setAttribute(ORIG_SHADOW, t.style.boxShadow || '');
       t.style.background = 'transparent';
       t.style.boxShadow = 'none';
     }
-    log('transparent bg ' + describe(el));
+    if (!glass) log('transparent bg ' + describe(el));
+  }
+  // iOS 26 style tab items: semibold labels (inherited into shadow
+  // content) and a glass pill behind the active item. The glyphs
+  // themselves live in YouTube's shadow DOM and cannot be redrawn
+  // from here, so the look comes from the pill, the weight and the
+  // glass bar. Re-applied every lift pass so tab switches restyle.
+  function stylePivotItems(el) {
+    if (!isGlassBar(el)) return;
+    var items = el.querySelectorAll('ytm-pivot-bar-item-renderer');
+    if (items.length === 0) items = el.querySelectorAll('[role="tab"]');
+    var selfTag = (el.tagName || '').toLowerCase();
+    var list = [];
+    if (selfTag.indexOf('pivot-bar-item') >= 0) list.push(el);
+    for (var i = 0; i < items.length; i++) list.push(items[i]);
+    for (var k = 0; k < list.length; k++) {
+      var it = list[k];
+      var cn = it.className;
+      var cls = (typeof cn === 'string') ? cn : '';
+      var active = it.hasAttribute('active') || it.getAttribute('aria-selected') === 'true' || cls.indexOf('active') >= 0 || cls.indexOf('selected') >= 0;
+      it.style.fontWeight = '600';
+      it.style.borderRadius = '999px';
+      it.style.background = active ? 'rgba(127,127,127,0.22)' : 'transparent';
+    }
   }
   function restoreBgOne(t) {
     t.style.background = t.getAttribute(ORIG_BG) || '';
     t.style.boxShadow = t.getAttribute(ORIG_SHADOW) || '';
     t.removeAttribute(ORIG_BG);
     t.removeAttribute(ORIG_SHADOW);
+  }
+  function restoreGlass(el) {
+    if (!el.hasAttribute(ORIG_GLASS)) return;
+    el.style.backdropFilter = el.getAttribute(ORIG_BF) || '';
+    el.style.webkitBackdropFilter = el.getAttribute(ORIG_WBF) || '';
+    el.style.borderTop = el.getAttribute(ORIG_BORDER) || '';
+    el.style.borderRadius = el.getAttribute(ORIG_RADIUS) || '';
+    el.style.left = el.getAttribute(ORIG_LEFT) || '';
+    el.style.right = el.getAttribute(ORIG_RIGHT) || '';
+    el.style.width = el.getAttribute(ORIG_WIDTH) || '';
+    el.removeAttribute(ORIG_GLASS);
+    el.removeAttribute(ORIG_BF);
+    el.removeAttribute(ORIG_WBF);
+    el.removeAttribute(ORIG_BORDER);
+    el.removeAttribute(ORIG_RADIUS);
+    el.removeAttribute(ORIG_LEFT);
+    el.removeAttribute(ORIG_RIGHT);
+    el.removeAttribute(ORIG_WIDTH);
   }
   function restore(el) {
     el.style.bottom = el.getAttribute(ORIG_BOTTOM) || '';
@@ -1403,6 +1500,7 @@ final class BrowserSession: ObservableObject {
     var cleared = el.querySelectorAll('[' + ORIG_BG + ']');
     for (var i = 0; i < cleared.length; i++) restoreBgOne(cleared[i]);
     if (el.hasAttribute(ORIG_BG)) restoreBgOne(el);
+    restoreGlass(el);
   }
   // Bottom of the bar's visible content: a bar container often carries
   // empty space below its icons (e.g. an empty mini-player slot), and
@@ -1424,6 +1522,7 @@ final class BrowserSession: ObservableObject {
   }
   function lift(el, px, z) {
     clearBarBackground(el, z);
+    stylePivotItems(el);
     if (!el.hasAttribute(ORIG_BOTTOM)) el.setAttribute(ORIG_BOTTOM, el.style.bottom || '');
     if (!el.hasAttribute(ORIG_TRANSFORM)) el.setAttribute(ORIG_TRANSFORM, el.style.transform || '');
     var dead = 0;
