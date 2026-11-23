@@ -2712,6 +2712,13 @@ struct BrowserView: View {
             ReadingListView(session: session)
         }
         }
+        // The keyboard must not lift the chrome: the bottom lift follows
+        // geo.safeAreaInsets.bottom, which grows by the keyboard height,
+        // so the searchbar rode to mid-screen and covered the page.
+        // Ignore the keyboard safe area — except while the address field
+        // or the find bar is being typed in, since those live in the
+        // bottom chrome and must stay visible above the keyboard.
+        .ignoresSafeArea(isEditingAddress || showingFind ? [] : .keyboard)
     }
 
     // MARK: Floating transparent navbar (Safari-style: back / address pill / tabs / menu) — no background fill, the page shows through
