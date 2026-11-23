@@ -3029,10 +3029,26 @@ struct BrowserView: View {
             }
             TextField("Cari atau masukkan alamat", text: $addressDraft, onEditingChanged: { editing in
                 isEditingAddress = editing
-                if let tab = session.selectedTab {
-                    addressDraft = editing ? tab.urlString : collapsedAddressText(for: tab.urlString)
+                // Swap the text on the next runloop: changing a
+                // TextField's bound text inside this callback is
+                // unreliable (the field keeps showing the old text),
+                // which is why tapping the host pill never revealed
+                // the full URL.
+                DispatchQueue.main.async {
+                    if let tab = session.selectedTab {
+                        addressDraft = editing ? tab.urlString : collapsedAddressText(for: tab.urlString)
+                    }
                 }
             })
+            .onTapGesture {
+                // Pre-fill the full URL before focus lands, so the
+                // field opens on the whole address, not the host.
+                // Guarded: taps while already editing (cursor moves)
+                // must never reset what the user typed.
+                if !isEditingAddress, let tab = session.selectedTab {
+                    addressDraft = tab.urlString
+                }
+            }
             .focused($addressFocused)
             .autocapitalization(.none).autocorrectionDisabled()
             .onSubmit { commitAddress() }
