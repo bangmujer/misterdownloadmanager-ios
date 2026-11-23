@@ -2372,8 +2372,12 @@ struct BrowserView: View {
     @FocusState private var addressFocused: Bool
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            Color.clear.ignoresSafeArea()
+        // GeometryReader reads the REAL bottom safe-area inset (which
+        // accounts for the tab bar) before anything ignores it, so the
+        // navbar can be lifted exactly above the tab bar.
+        GeometryReader { geo in
+            ZStack(alignment: .bottom) {
+                Color.clear.ignoresSafeArea()
             ZStack {
                 if let tab = session.selectedTab {
                     BrowserWebView(session: session, tabID: tab.id, settings: store.browserSettings)
@@ -2384,11 +2388,6 @@ struct BrowserView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 76) }
-            // Only the page layer ignores the bottom safe area, so it
-            // paints to the physical bottom edge (under the floating
-            // navbar and tab bar). The navbar VStack below must NOT
-            // ignore it, or it drops underneath the tab bar.
-            .ignoresSafeArea(edges: .bottom)
             VStack(spacing: 8) {
                 if showingFind { findBar }
                 // Floating DevTools button (DevSnoop-style): only when
@@ -2408,10 +2407,15 @@ struct BrowserView: View {
                 }
                 floatingNavBar
             }
+            // Lift the chrome above the tab bar by the real bottom
+            // safe-area inset, so the searchbar stays above the tab bar
+            // while the page still paints to the physical bottom edge.
+            .padding(.bottom, geo.safeAreaInsets.bottom + 6)
         }
-        // The root respects the bottom safe area so the floating
-        // navbar stays above the tab bar; only the page layer above
-        // ignores it (see the inner ZStack).
+        // The whole browser ignores the bottom safe area so the page
+        // paints to the physical bottom edge with no white band; the
+        // navbar VStack above is lifted clear of the tab bar.
+        .ignoresSafeArea(edges: .bottom)
         .overlay(alignment: .top) {
             if let notice = capturedNotice {
                 Text(notice)
@@ -2486,8 +2490,7 @@ struct BrowserView: View {
         .onDisappear { session.saveTabs() }
         .sheet(isPresented: $showingAdBlock) {
             AdBlockPanelView()
-                .presentationDetents([.height(240)])
-                .presentationDragIndicator(.hidden)
+                .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showingCookies) {
             CookiesView(dataStore: cookieStore, host: currentCleanHost)
@@ -2557,6 +2560,7 @@ struct BrowserView: View {
         }
         .sheet(isPresented: $showingReadingList) {
             ReadingListView(session: session)
+        }
         }
     }
 
@@ -4273,14 +4277,12 @@ private final class ScriptPickerPresenter: NSObject, UIDocumentPickerDelegate {
     }
 }
 
-/// Shield panel, redesigned Via-style: the same paged icon-grid bottom
-/// sheet as the ⋯ menu, grouped by function, one tap per setting.
-/// Anything needing text opens a small editor sheet; the long scrolling
-/// form is gone. Every change saves immediately.
+/// AdBlock & extensions settings, vertical scrolling form grouped by
+/// function (like the original panel). Every change saves immediately;
+/// anything needing text opens a small editor sheet.
 struct AdBlockPanelView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
-    @State private var page = 0
     @State private var editor: PanelEditor?
     @State private var showingExtensions = false
     @State private var showingNewExtension = false
@@ -4293,123 +4295,109 @@ struct AdBlockPanelView: View {
         var id: Self { self }
     }
 
-    private struct PanelCell: Identifiable {
-        let id = UUID()
-        let title: String
-        let detail: String?
-        let systemImage: String
-        var isActive: Bool = false
-        let action: () -> Void
-    }
-
     var body: some View {
-        VStack(spacing: 0) {
-            TabView(selection: $page) {
-                ForEach(pages.indices, id: \.self) { pageIndex in
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 5), spacing: 18) {
-                        ForEach(pages[pageIndex]) { panelCell($0) }
+        NavigationStack {
+            Form {
+                Section("Perlindungan") {
+                    cycleRow(title: "Pelacakan", value: trackingLabel) { cycleTrackingProtection() }
+                    Toggle("Hanya HTTPS", isOn: binding(\.httpsOnly))
+                    editorRow(title: "Pengecualian", detail: countDetail(store.browserSettings.siteExceptions.count, "situs")) { editor = .exceptions }
+                }
+                Section("AdBlock") {
+                    Toggle("AdBlock Ghostery", isOn: binding(\.adBlockEnabled))
+                    Toggle("AdBlock kustom", isOn: binding(\.customAdBlockEnabled))
+                    editorRow(title: "Allowlist", detail: countDetail(store.browserSettings.customAllowFilters.count, "entri")) { editor = .allow }
+                    editorRow(title: "Filter kustom", detail: countDetail(store.browserSettings.customBlockFilters.count, "filter")) { editor = .block }
+                }
+                Section("Ekstensi") {
+                    Button { showingExtensions = true } label: {
+                        HStack { Text("Ekstensi"); Spacer(); Text(extensionsDetail).foregroundStyle(.secondary) }
                     }
-                    .padding(.horizontal, 10)
-                    .frame(maxHeight: .infinity, alignment: .top)
-                    .tag(pageIndex)
+                    .buttonStyle(.plain)
+                    Button { showingExtensions = true; showingNewExtension = true } label: {
+                        HStack { Text("Tambah ekstensi"); Spacer(); Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
+                    }
+                    .buttonStyle(.plain)
+                    Button { pickerPresenter.present { importScript(from: $0) } } label: {
+                        HStack { Text("Impor file .js"); Spacer(); Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
+                    }
+                    .buttonStyle(.plain)
+                }
+                Section("AI") {
+                    cycleRow(title: "Minta AI", value: store.browserSettings.aiProvider) { cycleAIProvider() }
+                    editorRow(title: "Model AI", detail: aiModelLabel) { editor = .aiModel }
+                }
+                Section("Browser") {
+                    cycleRow(title: "Mesin cari", value: store.browserSettings.searchEngine) { cycleSearchEngine() }
+                    cycleRow(title: "User Agent", value: uaShortLabel) { cycleUserAgent() }
+                    editorRow(title: "Beranda", detail: homeHostLabel) { editor = .homePage }
+                }
+                Section("Media") {
+                    Toggle("Background playback", isOn: binding(\.backgroundPlayback))
+                    Toggle("Picture in Picture", isOn: binding(\.pictureInPicture))
+                }
+                Section("Konten") {
+                    Toggle("Blokir popup", isOn: binding(\.blockPopups))
+                    Toggle("Pratinjau link", isOn: binding(\.linkPreview))
+                    Toggle("Deteksi alamat", isOn: binding(\.detectAddresses))
+                    Toggle("Web Inspector", isOn: binding(\.webInspector))
+                    Toggle("Lewati timer", isOn: binding(\.skipTimers))
+                    Toggle("Tanpa redirect", isOn: binding(\.noRedirects))
+                }
+                Section("Gestur") {
+                    Toggle("Tombol DevTools", isOn: binding(\.showDevToolsButton))
+                    Toggle("Geser tepi back/forward", isOn: binding(\.gestureEdgeSwipe))
+                    Toggle("Tarik reload", isOn: binding(\.gesturePullRefresh))
+                    Toggle("Hard reload", isOn: binding(\.gestureHardReload))
+                }
+                Section("Situs ini") {
+                    editorRow(title: "Freeze timer", detail: countDetail(store.browserSettings.freezeTimerHosts.count, "situs")) { editor = .freeze }
+                    editorRow(title: "Mode kompatibilitas", detail: countDetail(store.browserSettings.drmCompatHosts.count, "situs")) { editor = .compat }
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: .always))
-            .frame(height: 184)
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.down")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 44, height: 30)
-            }
-            .padding(.bottom, 6)
+            .navigationTitle("AdBlock & Ekstensi")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Selesai") { dismiss() } } }
         }
-        .padding(.top, 14)
-        .onAppear { page = 0 }
         .sheet(item: $editor) { PanelEditorSheet(editor: $0) }
         .sheet(isPresented: $showingExtensions) { extensionsSheet }
     }
 
-    private func panelCell(_ cell: PanelCell) -> some View {
-        Button(action: cell.action) {
-            VStack(spacing: 6) {
-                Image(systemName: cell.systemImage)
-                    .font(.title2)
-                    .frame(height: 30)
-                Text(cell.detail == nil ? cell.title : cell.title + "\n" + cell.detail!)
-                    .font(.caption2)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-            }
-            .frame(maxWidth: .infinity)
+    // MARK: - Rows
+
+    private func cycleRow(title: String, value: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack { Text(title); Spacer(); Text(value).foregroundStyle(.secondary) }
         }
         .buttonStyle(.plain)
-        .foregroundStyle(cell.isActive ? .blue : .primary)
     }
 
-    // MARK: - Pages, grouped by function (same grouping idea as the ⋯ menu)
-
-    private var pages: [[PanelCell]] { [protectionPage, extensionsPage, browserPage, contentPage] }
-
-    private var protectionPage: [PanelCell] {
-        let s = store.browserSettings
-        return [
-            PanelCell(title: "Pelacakan", detail: trackingLabel, systemImage: "shield", isActive: s.trackingProtection != "off") { cycleTrackingProtection() },
-            PanelCell(title: "Hanya HTTPS", detail: nil, systemImage: "lock", isActive: s.httpsOnly) { toggle(\.httpsOnly) },
-            PanelCell(title: "Pengecualian", detail: countDetail(s.siteExceptions.count, "situs"), systemImage: "shield.slash") { editor = .exceptions },
-            PanelCell(title: "AdBlock Ghostery", detail: nil, systemImage: "shield.fill", isActive: s.adBlockEnabled) { toggle(\.adBlockEnabled) },
-            PanelCell(title: "AdBlock kustom", detail: nil, systemImage: "shield.lefthalf.fill", isActive: s.customAdBlockEnabled) { toggle(\.customAdBlockEnabled) },
-            PanelCell(title: "Allowlist", detail: countDetail(s.customAllowFilters.count, "entri"), systemImage: "checkmark.shield") { editor = .allow },
-            PanelCell(title: "Filter kustom", detail: countDetail(s.customBlockFilters.count, "filter"), systemImage: "list.bullet.rectangle") { editor = .block },
-        ]
+    private func editorRow(title: String, detail: String?, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title)
+                Spacer()
+                if let detail { Text(detail).foregroundStyle(.secondary) }
+                Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
-    private var extensionsPage: [PanelCell] {
+    private var extensionsDetail: String {
         let s = store.browserSettings
+        if s.extensions.isEmpty { return "Tidak ada" }
         let active = s.extensions.filter(\.enabled).count
-        return [
-            PanelCell(title: "Ekstensi", detail: s.extensions.isEmpty ? "Tidak ada" : "\(s.extensions.count) script, \(active) aktif", systemImage: "puzzlepiece.extension") { showingExtensions = true },
-            PanelCell(title: "Tambah ekstensi", detail: nil, systemImage: "plus") { showingExtensions = true; showingNewExtension = true },
-            PanelCell(title: "Impor file .js", detail: nil, systemImage: "square.and.arrow.down") { pickerPresenter.present { importScript(from: $0) } },
-            PanelCell(title: "Minta AI", detail: s.aiProvider, systemImage: "sparkles") { cycleAIProvider() },
-            PanelCell(title: "Model AI", detail: aiModelLabel, systemImage: "cpu") { editor = .aiModel },
-        ]
-    }
-
-    private var browserPage: [PanelCell] {
-        let s = store.browserSettings
-        return [
-            PanelCell(title: "Mesin cari", detail: s.searchEngine, systemImage: "magnifyingglass") { cycleSearchEngine() },
-            PanelCell(title: "User Agent", detail: uaShortLabel, systemImage: "globe") { cycleUserAgent() },
-            PanelCell(title: "Beranda", detail: homeHostLabel, systemImage: "house") { editor = .homePage },
-            PanelCell(title: "Background playback", detail: nil, systemImage: "play.circle", isActive: s.backgroundPlayback) { toggle(\.backgroundPlayback) },
-            PanelCell(title: "Picture in Picture", detail: nil, systemImage: "rectangle.on.rectangle", isActive: s.pictureInPicture) { toggle(\.pictureInPicture) },
-            PanelCell(title: "Tombol DevTools", detail: nil, systemImage: "chevron.left.forwardslash.chevron.right", isActive: s.showDevToolsButton) { toggle(\.showDevToolsButton) },
-            PanelCell(title: "Geser tepi back/forward", detail: nil, systemImage: "arrow.left.arrow.right", isActive: s.gestureEdgeSwipe) { toggle(\.gestureEdgeSwipe) },
-            PanelCell(title: "Tarik reload", detail: nil, systemImage: "arrow.down", isActive: s.gesturePullRefresh) { toggle(\.gesturePullRefresh) },
-            PanelCell(title: "Hard reload", detail: nil, systemImage: "arrow.clockwise", isActive: s.gestureHardReload) { toggle(\.gestureHardReload) },
-        ]
-    }
-
-    private var contentPage: [PanelCell] {
-        let s = store.browserSettings
-        return [
-            PanelCell(title: "Blokir popup", detail: nil, systemImage: "nosign", isActive: s.blockPopups) { toggle(\.blockPopups) },
-            PanelCell(title: "Pratinjau link", detail: nil, systemImage: "eye", isActive: s.linkPreview) { toggle(\.linkPreview) },
-            PanelCell(title: "Deteksi alamat", detail: nil, systemImage: "map", isActive: s.detectAddresses) { toggle(\.detectAddresses) },
-            PanelCell(title: "Web Inspector", detail: nil, systemImage: "wrench.and.screwdriver", isActive: s.webInspector) { toggle(\.webInspector) },
-            PanelCell(title: "Lewati timer", detail: nil, systemImage: "timer", isActive: s.skipTimers) { toggle(\.skipTimers) },
-            PanelCell(title: "Tanpa redirect", detail: nil, systemImage: "arrow.forward", isActive: s.noRedirects) { toggle(\.noRedirects) },
-            PanelCell(title: "Freeze timer", detail: countDetail(s.freezeTimerHosts.count, "situs"), systemImage: "snowflake") { editor = .freeze },
-            PanelCell(title: "Mode kompatibilitas", detail: countDetail(s.drmCompatHosts.count, "situs"), systemImage: "checkmark.seal") { editor = .compat },
-        ]
+        return "\(s.extensions.count) script, \(active) aktif"
     }
 
     // MARK: - Helpers
 
-    private func toggle(_ keyPath: WritableKeyPath<BrowserSettings, Bool>) {
-        store.browserSettings[keyPath: keyPath].toggle()
-        store.saveBrowserSettings()
+    private func binding(_ keyPath: WritableKeyPath<BrowserSettings, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { store.browserSettings[keyPath: keyPath] },
+            set: { store.browserSettings[keyPath: keyPath] = $0; store.saveBrowserSettings() }
+        )
     }
 
     private func countDetail(_ count: Int, _ noun: String) -> String? {
