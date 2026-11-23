@@ -2,6 +2,8 @@ import SwiftUI
 import Foundation
 import Security
 import UIKit
+import PhotosUI
+import UniformTypeIdentifiers
 
 // MARK: - Ask AI providers
 //
@@ -103,22 +105,140 @@ enum KeychainHelper {
     }
 }
 
+// MARK: - Ask AI attachments (one photo or file per question)
+
+/// A single attachment held in memory only for the life of the Ask AI
+/// sheet — never written to disk or settings. Images are downscaled and
+/// re-encoded as JPEG for vision-capable models; text files are read as
+/// text into the prompt; PDFs go to the model as base64 documents where
+/// the provider supports them; anything else reaches the model as name,
+/// type and size only.
+struct AIAttachment {
+    var fileName: String
+    var mimeType: String
+    var data: Data
+    var isImage: Bool
+
+    var displaySize: String {
+        let kb = Double(data.count) / 1024
+        if kb < 1024 { return String(format: "%.0f KB", kb) }
+        return String(format: "%.1f MB", kb / 1024)
+    }
+
+    var isPDF: Bool { mimeType == "application/pdf" }
+
+    /// Readable text for the prompt, or nil for images, PDFs and binary
+    /// files. Extension-less text and code files are covered by the
+    /// UTF-8 decode + NUL check, not by the MIME type alone.
+    var readableText: String? {
+        if isImage || isPDF { return nil }
+        guard let text = String(data: data, encoding: .utf8), !text.contains("\0") else { return nil }
+        if text.count > 60_000 { return String(text.prefix(60_000)) + "\n... (dipotong — file lebih panjang dari ini)" }
+        return text
+    }
+
+    static func fromPickedData(fileName: String, data: Data) -> AIAttachment {
+        if let image = UIImage(data: data) {
+            return AIAttachment(fileName: fileName, mimeType: "image/jpeg", data: downscaledJPEG(image), isImage: true)
+        }
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        let mime = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
+        return AIAttachment(fileName: fileName, mimeType: mime, data: data, isImage: false)
+    }
+
+    private static func downscaledJPEG(_ image: UIImage) -> Data {
+        let maxEdge: CGFloat = 1568
+        let size = image.size
+        let longest = max(size.width, size.height)
+        guard longest > maxEdge else {
+            return image.jpegData(compressionQuality: 0.85) ?? Data()
+        }
+        let scale = maxEdge / longest
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
+        return resized.jpegData(compressionQuality: 0.85) ?? Data()
+    }
+}
+
+/// UIKit pickers presented from the top view controller. SwiftUI's
+/// `.fileImporter` silently drops selections when presented from a
+/// sheet, and the Ask AI sheet is itself presented from the browser —
+/// the same reason the extension import uses a UIKit presenter.
+private final class AIAttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIDocumentPickerDelegate {
+    private var onImage: ((Data, String) -> Void)?
+    private var onFile: ((URL) -> Void)?
+
+    func presentPhoto(onPick: @escaping (Data, String) -> Void) {
+        onImage = onPick
+        var config = PHPickerConfiguration(photoLibrary: .shared())
+        config.filter = .images
+        config.selectionLimit = 1
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = self
+        Self.topViewController()?.present(picker, animated: true)
+    }
+
+    func presentFile(onPick: @escaping (URL) -> Void) {
+        onFile = onPick
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
+        picker.delegate = self
+        picker.allowsMultipleSelection = false
+        Self.topViewController()?.present(picker, animated: true)
+    }
+
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        picker.dismiss(animated: true)
+        let pick = onImage
+        onImage = nil
+        guard let result = results.first else { return }
+        let provider = result.itemProvider
+        guard provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) else { return }
+        provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+            guard let data else { return }
+            DispatchQueue.main.async { pick?(data, "foto.jpg") }
+        }
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        let pick = onFile
+        onFile = nil
+        controller.dismiss(animated: true)
+        guard let url = urls.first else { return }
+        pick?(url)
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        onFile = nil
+        controller.dismiss(animated: true)
+    }
+
+    private static func topViewController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let window = scenes.flatMap({ $0.windows }).first(where: { $0.isKeyWindow }) else { return nil }
+        var top = window.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        return top
+    }
+}
+
 // MARK: - Streaming AI client (SSE for all three APIs)
 
 enum AIClient {
     static func ask(provider: AIProvider, model: String, apiKey: String, endpoint: String = "",
+                    attachment: AIAttachment? = nil,
                     question: String, pageTitle: String, pageURL: String, pageText: String,
                     onToken: @escaping (String) -> Void,
                     onDone: @escaping (String?) -> Void) {
-        let prompt = buildPrompt(question: question, pageTitle: pageTitle, pageURL: pageURL, pageText: pageText)
-        guard let request = makeRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, prompt: prompt) else {
+        let prompt = buildPrompt(question: question, pageTitle: pageTitle, pageURL: pageURL, pageText: pageText, attachment: attachment)
+        guard let request = makeRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: attachment, prompt: prompt) else {
             onDone("Tidak bisa membuat permintaan untuk \(provider.displayName).")
             return
         }
         stream(request: request, provider: provider, onToken: onToken, onDone: onDone)
     }
 
-    private static func buildPrompt(question: String, pageTitle: String, pageURL: String, pageText: String) -> String {
+    private static func buildPrompt(question: String, pageTitle: String, pageURL: String, pageText: String, attachment: AIAttachment?) -> String {
         var parts: [String] = []
         parts.append("Kamu adalah asisten AI di dalam browser. Jawablah dalam bahasa yang sama dengan pertanyaan pengguna.")
         parts.append("Halaman yang sedang dibuka:\nJudul: \(pageTitle)\nURL: \(pageURL)")
@@ -127,6 +247,17 @@ enum AIClient {
             parts.append("Isi halaman: (tidak ada teks yang bisa dibaca dari halaman ini)")
         } else {
             parts.append("Isi halaman (dipotong):\n\(pageText)")
+        }
+        if let attachment {
+            if let text = attachment.readableText {
+                parts.append("Lampiran file \(attachment.fileName):\n\(text)")
+            } else if attachment.isImage {
+                parts.append("Lampiran: foto bernama \(attachment.fileName), terlampir sebagai gambar — lihat gambarnya untuk menjawab.")
+            } else if attachment.isPDF {
+                parts.append("Lampiran: dokumen PDF bernama \(attachment.fileName), terlampir sebagai dokumen — baca isinya untuk menjawab.")
+            } else {
+                parts.append("Lampiran: file \(attachment.fileName) (\(attachment.mimeType), \(attachment.displaySize)) — isinya tidak bisa dibaca sebagai teks, hanya nama dan ukurannya yang diketahui.")
+            }
         }
         parts.append("Pertanyaan pengguna: \(question)")
         return parts.joined(separator: "\n\n")
@@ -142,14 +273,18 @@ enum AIClient {
         return URL(string: base + "/chat/completions")
     }
 
-    private static func makeRequest(provider: AIProvider, model: String, apiKey: String, endpoint: String, prompt: String) -> URLRequest? {
+    private static func makeRequest(provider: AIProvider, model: String, apiKey: String, endpoint: String, attachment: AIAttachment?, prompt: String) -> URLRequest? {
         switch provider {
         case .gemini:
             guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):streamGenerateContent?alt=sse&key=\(apiKey)") else { return nil }
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try? JSONSerialization.data(withJSONObject: ["contents": [["parts": [["text": prompt]]]]])
+            var parts: [[String: Any]] = [["text": prompt]]
+            if let attachment, attachment.isImage || attachment.isPDF {
+                parts.append(["inline_data": ["mime_type": attachment.mimeType, "data": attachment.data.base64EncodedString()]])
+            }
+            req.httpBody = try? JSONSerialization.data(withJSONObject: ["contents": [["parts": parts]]])
             return req
         case .chatgpt, .custom:
             // Same OpenAI chat/completions shape; Custom just points it
@@ -166,9 +301,25 @@ enum AIClient {
             req.httpMethod = "POST"
             req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            // Plain string content when there is no media part (unchanged
+            // behaviour); a parts array when an image/PDF rides along.
+            let content: Any
+            if let attachment, attachment.isImage {
+                content = [
+                    ["type": "text", "text": prompt],
+                    ["type": "image_url", "image_url": ["url": "data:\(attachment.mimeType);base64,\(attachment.data.base64EncodedString())"]],
+                ]
+            } else if let attachment, attachment.isPDF {
+                content = [
+                    ["type": "text", "text": prompt],
+                    ["type": "file", "file": ["filename": attachment.fileName, "file_data": "data:application/pdf;base64,\(attachment.data.base64EncodedString())"]],
+                ]
+            } else {
+                content = prompt
+            }
             req.httpBody = try? JSONSerialization.data(withJSONObject: [
                 "model": model, "stream": true,
-                "messages": [["role": "user", "content": prompt]],
+                "messages": [["role": "user", "content": content]],
             ])
             return req
         case .claude:
@@ -178,9 +329,23 @@ enum AIClient {
             req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
             req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let content: Any
+            if let attachment, attachment.isImage {
+                content = [
+                    ["type": "image", "source": ["type": "base64", "media_type": attachment.mimeType, "data": attachment.data.base64EncodedString()]],
+                    ["type": "text", "text": prompt],
+                ]
+            } else if let attachment, attachment.isPDF {
+                content = [
+                    ["type": "document", "source": ["type": "base64", "media_type": "application/pdf", "data": attachment.data.base64EncodedString()]],
+                    ["type": "text", "text": prompt],
+                ]
+            } else {
+                content = prompt
+            }
             req.httpBody = try? JSONSerialization.data(withJSONObject: [
                 "model": model, "max_tokens": 2048, "stream": true,
-                "messages": [["role": "user", "content": prompt]],
+                "messages": [["role": "user", "content": content]],
             ])
             return req
         case .meta:
@@ -267,6 +432,8 @@ struct AskAIView: View {
     @State private var endpoint = ""
     @State private var apiKey = ""
     @State private var keySaved = false
+    @State private var attachment: AIAttachment?
+    @State private var attachmentPicker = AIAttachmentPicker()
     @State private var question = ""
     @State private var answer = ""
     @State private var isLoading = false
@@ -354,6 +521,46 @@ struct AskAIView: View {
                             .frame(minHeight: 80)
                             .padding(8)
                             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                        if provider != .meta {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Lampiran").font(.headline)
+                                if let attachment {
+                                    HStack(spacing: 10) {
+                                        if attachment.isImage, let uiImage = UIImage(data: attachment.data) {
+                                            Image(uiImage: uiImage)
+                                                .resizable().scaledToFill()
+                                                .frame(width: 44, height: 44).clipped().cornerRadius(8)
+                                        } else {
+                                            Image(systemName: attachment.isPDF ? "doc.fill" : "doc")
+                                                .font(.title2).foregroundStyle(.secondary)
+                                                .frame(width: 44, height: 44)
+                                        }
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(attachment.fileName).font(.subheadline).lineLimit(2)
+                                            Text("\(attachment.displaySize) · \(attachment.isImage ? "foto" : attachment.isPDF ? "PDF" : attachment.mimeType)")
+                                                .font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Button { self.attachment = nil } label: {
+                                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .padding(10)
+                                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                }
+                                HStack(spacing: 8) {
+                                    Button { pickPhoto() } label: { Label("Foto", systemImage: "photo") }
+                                        .padding(.horizontal, 12).padding(.vertical, 8)
+                                        .background(Color(.secondarySystemBackground), in: Capsule())
+                                    Button { pickFile() } label: { Label("File", systemImage: "doc") }
+                                        .padding(.horizontal, 12).padding(.vertical, 8)
+                                        .background(Color(.secondarySystemBackground), in: Capsule())
+                                }
+                                .font(.subheadline)
+                                Text("Satu lampiran per pertanyaan; pilih lagi untuk mengganti. Foto dikirim sebagai gambar, file teks dibaca isinya, PDF dikirim sebagai dokumen — semua tergantung model dan endpoint-nya mendukung atau tidak. Jenis file lain hanya terbaca nama dan ukurannya.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                         HStack(spacing: 8) {
                             quickAction("Ringkas halaman ini")
                             quickAction("Jelaskan sederhana")
@@ -442,6 +649,32 @@ struct AskAIView: View {
         keySaved = !saved.isEmpty
     }
 
+    private func pickPhoto() {
+        attachmentPicker.presentPhoto { data, name in
+            guard data.count <= 30 * 1024 * 1024 else {
+                errorText = "Foto terlalu besar (maks 30 MB)."
+                return
+            }
+            attachment = AIAttachment.fromPickedData(fileName: name, data: data)
+        }
+    }
+
+    private func pickFile() {
+        attachmentPicker.presentFile { url in
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url) else {
+                errorText = "File tidak bisa dibaca."
+                return
+            }
+            guard data.count <= 20 * 1024 * 1024 else {
+                errorText = "File terlalu besar (maks 20 MB)."
+                return
+            }
+            attachment = AIAttachment.fromPickedData(fileName: url.lastPathComponent, data: data)
+        }
+    }
+
     private func send() {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, !isLoading else { return }
@@ -462,7 +695,7 @@ struct AskAIView: View {
         answer = ""
         errorText = nil
         AIClient.ask(
-            provider: provider, model: model, apiKey: apiKey, endpoint: endpoint,
+            provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: attachment,
             question: q, pageTitle: pageTitle, pageURL: pageURL, pageText: pageText,
             onToken: { token in answer += token },
             onDone: { message in
