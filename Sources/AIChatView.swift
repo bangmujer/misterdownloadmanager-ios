@@ -56,8 +56,7 @@ struct AIChatView: View {
 
     var body: some View {
         NavigationStack {
-            GeometryReader { geo in
-                VStack(spacing: 0) {
+            VStack(spacing: 0) {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
@@ -108,8 +107,12 @@ struct AIChatView: View {
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
             }
-            .padding(.bottom, max(0, bottomBarHeight - geo.safeAreaInsets.bottom))
-            }
+            // Full bar height, no subtraction: the safe-area value the
+            // GeometryReader reported already includes the bar, so
+            // subtracting it (v0.6.62) computed a zero padding and the
+            // field stayed covered. The plain column does not inset
+            // itself, so it needs the whole bar height.
+            .padding(.bottom, bottomBarHeight)
             .navigationTitle("AI")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -154,6 +157,9 @@ struct AIChatView: View {
             }
             Text("Riwayat chat hanya tersimpan selama aplikasi dibuka — tutup aplikasi berarti mulai chat baru.")
                 .font(.caption).foregroundStyle(.secondary)
+            // Build stamp, so a screenshot always proves which build is installed.
+            Text("Build \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+                .font(.caption2).foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 24)
