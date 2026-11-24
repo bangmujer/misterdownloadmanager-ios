@@ -107,13 +107,14 @@ enum KeychainHelper {
 
 // MARK: - Ask AI attachments (one photo or file per question)
 
-/// A single attachment held in memory only for the life of the Ask AI
-/// sheet — never written to disk or settings. Images are downscaled and
-/// re-encoded as JPEG for vision-capable models; text files are read as
-/// text into the prompt; PDFs go to the model as base64 documents where
-/// the provider supports them; anything else reaches the model as name,
-/// type and size only.
-struct AIAttachment: Equatable {
+/// A single attachment held in memory for one question — never written
+/// to settings. Images are downscaled and re-encoded as JPEG for
+/// vision-capable models; text files are read as text into the prompt;
+/// PDFs go to the model as base64 documents where the provider supports
+/// them; anything else reaches the model as name, type and size only.
+/// Chat sessions persist attachments up to 2 MB with their history;
+/// larger ones keep only name/type/size.
+struct AIAttachment: Equatable, Codable {
     var fileName: String
     var mimeType: String
     var data: Data

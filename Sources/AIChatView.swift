@@ -6,28 +6,27 @@ import SwiftUI
 // providers as the Ask AI sheet, but keeps a multi-turn history, and its
 // own provider choice defaults to Custom — any OpenAI-compatible
 // chat/completions endpoint (the format from the user's own gateway),
-// configured with a base URL, a model name and an API key. History is
-// in-memory only: closing the app starts a fresh chat.
-
-private struct AIChatMessage: Identifiable, Equatable {
-    let id: UUID
-    var role: String // "user" or "assistant"
-    var text: String
-    var attachment: AIAttachment?
-
-    // Explicit init: the synthesized memberwise init does not expose
-    // `id` (it has a default value), and the streaming path needs to
-    // construct a message with a known id to append tokens to.
-    init(id: UUID = UUID(), role: String, text: String, attachment: AIAttachment? = nil) {
-        self.id = id
-        self.role = role
-        self.text = text
-        self.attachment = attachment
-    }
-}
+// configured with a base URL, a model name and an API key. Chats persist
+// in sessions grouped into projects, Kimi-style, via AIChatStore.
 
 struct AIChatView: View {
     @EnvironmentObject var store: DownloadStore
+    @StateObject private var chatStore = AIChatStore()
+    @State private var showingSidebar = false
+    @State private var sidebarSearch = ""
+    @State private var collapsedProjects: Set<UUID> = []
+    @State private var projectsSectionExpanded = true
+    @State private var newProjectName = ""
+    @State private var showingNewProject = false
+    @State private var renamingSession: AIChatSession?
+    @State private var renamingProject: AIChatProject?
+    @State private var renameText = ""
+    @State private var showingRename = false
+    @State private var deletingSession: AIChatSession?
+    @State private var showingDeleteSession = false
+    @State private var deletingProject: AIChatProject?
+    @State private var showingDeleteProject = false
+    @State private var didLoadSession = false
     @State private var provider: AIProvider = .custom
     @State private var model = ""
     @State private var endpoint = ""
@@ -47,7 +46,8 @@ struct AIChatView: View {
     @FocusState private var inputFocused: Bool
 
     var body: some View {
-        NavigationStack {
+        ZStack(alignment: .leading) {
+            NavigationStack {
             VStack(spacing: 0) {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -153,10 +153,9 @@ struct AIChatView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button { messages = []; errorText = nil; failedIDs = []; editingMessageID = nil; draft = ""; attachment = nil } label: {
-                        Label("Chat baru", systemImage: "square.and.pencil")
+                    Button { showingSidebar = true } label: {
+                        Label("Daftar chat", systemImage: "sidebar.left")
                     }
-                    .disabled(messages.isEmpty || isLoading)
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingSettings = true } label: {
@@ -180,7 +179,69 @@ struct AIChatView: View {
             provider = AIProvider(rawValue: store.browserSettings.aiChatProvider) ?? .custom
             if provider == .meta { provider = .custom }
             loadModelAndKey()
+            if !didLoadSession {
+                didLoadSession = true
+                chatStore.ensureCurrentSession()
+                messages = chatStore.currentSession?.messages ?? []
+            }
         }
+        .onChange(of: messages) { _ in
+            if !isLoading { persist() }
+        }
+        .alert("Proyek baru", isPresented: $showingNewProject) {
+            TextField("Nama proyek", text: $newProjectName)
+            Button("Batal", role: .cancel) { newProjectName = "" }
+            Button("Buat") {
+                let name = newProjectName.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty { chatStore.createProject(name: name) }
+                newProjectName = ""
+            }
+        }
+        .alert("Ubah nama", isPresented: $showingRename) {
+            TextField("Nama", text: $renameText)
+            Button("Batal", role: .cancel) { renamingSession = nil; renamingProject = nil }
+            Button("Simpan") {
+                let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !name.isEmpty {
+                    if let session = renamingSession { chatStore.rename(session, to: name) }
+                    if let project = renamingProject { chatStore.rename(project, to: name) }
+                }
+                renamingSession = nil; renamingProject = nil
+            }
+        }
+        .alert("Hapus chat ini?", isPresented: $showingDeleteSession) {
+            Button("Hapus", role: .destructive) {
+                if let session = deletingSession {
+                    let wasCurrent = session.id == chatStore.currentSessionID
+                    chatStore.delete(session)
+                    if wasCurrent { messages = chatStore.currentSession?.messages ?? [] }
+                    failedIDs = []; editingMessageID = nil; errorText = nil
+                }
+                deletingSession = nil
+            }
+            Button("Batal", role: .cancel) { deletingSession = nil }
+        } message: {
+            Text("Chat yang dihapus tidak bisa dikembalikan.")
+        }
+        .alert("Hapus proyek ini?", isPresented: $showingDeleteProject) {
+            Button("Hapus", role: .destructive) {
+                if let project = deletingProject { chatStore.delete(project) }
+                deletingProject = nil
+            }
+            Button("Batal", role: .cancel) { deletingProject = nil }
+        } message: {
+            Text("Chat di dalamnya tidak ikut terhapus, hanya pindah ke Obrolan.")
+        }
+            if showingSidebar {
+                Color.black.opacity(0.3)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+                    .onTapGesture { showingSidebar = false }
+                sidebar
+                    .transition(.move(edge: .leading))
+            }
+        }
+        .animation(.default, value: showingSidebar)
     }
 
     private var emptyState: some View {
@@ -207,6 +268,196 @@ struct AIChatView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 24)
+    }
+
+    // MARK: - Sidebar: projects (Kimi-style) and chats
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
+            Button { startNewChat() } label: {
+                Label("Chat baru", systemImage: "square.and.pencil")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.bordered)
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    DisclosureGroup(isExpanded: $projectsSectionExpanded) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Button { showingNewProject = true } label: {
+                                Label("Proyek baru", systemImage: "folder.badge.plus")
+                                    .font(.subheadline)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.vertical, 4)
+                            ForEach(filteredProjects) { project in
+                                projectGroup(project)
+                            }
+                        }
+                    } label: {
+                        Text("Proyek").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 12)
+                    Text("Obrolan").font(.subheadline).foregroundStyle(.secondary)
+                        .padding(.top, 12)
+                    ForEach(ungroupedChats) { session in
+                        chatRow(session)
+                    }
+                    if chatStore.sessions.isEmpty {
+                        Text("Belum ada chat.").foregroundStyle(.secondary).font(.subheadline).padding(.top, 16)
+                    }
+                }
+                .padding(.horizontal, 12)
+            }
+            HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField("Cari", text: $sidebarSearch)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Color(.secondarySystemBackground), in: Capsule())
+                Button { showingSidebar = false } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+            }
+            .padding(12)
+        }
+        .frame(width: 300)
+        .background(Color(.systemBackground))
+    }
+
+    private func projectGroup(_ project: AIChatProject) -> some View {
+        DisclosureGroup(isExpanded: projectExpandedBinding(for: project)) {
+            ForEach(projectChats(project)) { session in
+                chatRow(session)
+            }
+        } label: {
+            projectLabel(project)
+        }
+    }
+
+    private func projectLabel(_ project: AIChatProject) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "folder").foregroundStyle(.secondary)
+            Text(project.name).font(.subheadline).lineLimit(1)
+            Spacer()
+            Text("\(chatStore.sessions(in: project).count)").font(.caption).foregroundStyle(.secondary)
+        }
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button { renamingProject = project; renameText = project.name; showingRename = true } label: { Label("Ubah nama", systemImage: "pencil") }
+            Button("Hapus proyek", role: .destructive) { deletingProject = project; showingDeleteProject = true }
+        }
+    }
+
+    private func chatRow(_ session: AIChatSession) -> some View {
+        Button { openSession(session) } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(session.title).lineLimit(2).font(.subheadline)
+                    Text(session.updatedAt.formatted(date: .abbreviated, time: .omitted))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if session.id == chatStore.currentSessionID {
+                    Image(systemName: "checkmark").font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+            .padding(.vertical, 6).padding(.horizontal, 8)
+            .background(session.id == chatStore.currentSessionID ? Color(.secondarySystemBackground) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            Button { renamingSession = session; renameText = session.title; showingRename = true } label: { Label("Ubah nama", systemImage: "pencil") }
+            Menu("Pindahkan ke proyek") {
+                Button("Tanpa proyek") { chatStore.move(session, to: nil) }
+                ForEach(chatStore.projects) { project in
+                    Button(project.name) { chatStore.move(session, to: project.id) }
+                }
+            }
+            Button("Hapus", role: .destructive) { deletingSession = session; showingDeleteSession = true }
+        }
+    }
+
+    private var searchQuery: String {
+        sidebarSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private func matchesSearch(_ session: AIChatSession) -> Bool {
+        searchQuery.isEmpty || session.title.lowercased().contains(searchQuery)
+    }
+
+    private var filteredProjects: [AIChatProject] {
+        chatStore.projects.filter { project in
+            searchQuery.isEmpty
+                || project.name.lowercased().contains(searchQuery)
+                || chatStore.sessions(in: project).contains(where: matchesSearch)
+        }
+    }
+
+    private func projectChats(_ project: AIChatProject) -> [AIChatSession] {
+        let all = chatStore.sessions(in: project)
+        if searchQuery.isEmpty || project.name.lowercased().contains(searchQuery) { return all }
+        return all.filter(matchesSearch)
+    }
+
+    private var ungroupedChats: [AIChatSession] {
+        chatStore.sessions(in: nil).filter(matchesSearch)
+    }
+
+    private func projectExpandedBinding(for project: AIChatProject) -> Binding<Bool> {
+        Binding(
+            get: { !collapsedProjects.contains(project.id) || !searchQuery.isEmpty },
+            set: { expanded in
+                if expanded { collapsedProjects.remove(project.id) } else { collapsedProjects.insert(project.id) }
+            }
+        )
+    }
+
+    private func persist() {
+        chatStore.updateCurrent(messages: messages)
+        chatStore.save()
+    }
+
+    private func openSession(_ session: AIChatSession) {
+        persist()
+        chatStore.currentSessionID = session.id
+        chatStore.save()
+        messages = session.messages
+        failedIDs = []
+        editingMessageID = nil
+        errorText = nil
+        draft = ""
+        attachment = nil
+        showingSidebar = false
+    }
+
+    private func startNewChat() {
+        if let current = chatStore.currentSession, current.messages.isEmpty {
+            messages = []
+            failedIDs = []
+            editingMessageID = nil
+            errorText = nil
+            draft = ""
+            attachment = nil
+            showingSidebar = false
+            inputFocused = true
+            return
+        }
+        persist()
+        chatStore.createSession()
+        messages = []
+        failedIDs = []
+        editingMessageID = nil
+        errorText = nil
+        draft = ""
+        attachment = nil
+        showingSidebar = false
+        inputFocused = true
     }
 
     private func bubble(_ message: AIChatMessage) -> some View {
@@ -374,6 +625,7 @@ struct AIChatView: View {
                 if message != nil || !gotAnswer {
                     failedIDs.insert(userMessage.id)
                 }
+                persist()
             }
         )
     }
