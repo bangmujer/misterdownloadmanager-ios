@@ -1307,6 +1307,10 @@ struct ToolLogCard: View {
             return ("arrow.left.arrow.right", .orange)
         case "get_cookies":
             return ("key", .pink)
+        case "get_storage":
+            return ("cylinder", .cyan)
+        case "get_page_info":
+            return ("doc.text", .mint)
         case "list_bookmarks":
             return ("bookmark", .yellow)
         case "list_history":

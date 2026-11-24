@@ -142,7 +142,17 @@ struct AgentTool {
         ),
         AgentTool(
             name: "get_cookies",
-            description: "Lihat cookie tab browser aktif: nama, nilai, domain, path, dan masa berlaku. Selalu diizinkan.",
+            description: "Lihat cookie tab browser aktif: hanya nama, domain, path, dan masa berlaku. Nilai cookie TIDAK PERNAH dikirim ke model.",
+            parameters: object([:])
+        ),
+        AgentTool(
+            name: "get_storage",
+            description: "Baca localStorage dan sessionStorage tab browser aktif (nilai dipotong 300 karakter).",
+            parameters: object([:])
+        ),
+        AgentTool(
+            name: "get_page_info",
+            description: "Info halaman tab browser aktif: URL, judul, user-agent, ukuran viewport, charset, dan waktu muat.",
             parameters: object([:])
         ),
     ]
@@ -193,6 +203,10 @@ enum AgentToolRunner {
             return await networkRequests(limit: (arguments["limit"] as? NSNumber)?.intValue ?? 20, store: store)
         case "get_cookies":
             return await cookies(store: store)
+        case "get_storage":
+            return await storage(store: store)
+        case "get_page_info":
+            return await pageInfo(store: store)
         default:
             return "Perkakas tidak dikenal: \(name)."
         }
@@ -487,9 +501,9 @@ enum AgentToolRunner {
         return text
     }
 
-    /// Full cookie list including values, always allowed: the user
-    /// explicitly asked for values after being told they travel to
-    /// the AI provider with the request.
+    /// Cookie names, domains, paths, and expiry only. Values are
+    /// never sent to the model: they are session tokens, and a tool
+    /// result travels to the AI provider with the request.
     private static func cookies(store: DownloadStore) async -> String {
         await withCheckedContinuation { continuation in
             Task { @MainActor in
@@ -503,7 +517,7 @@ enum AgentToolRunner {
                         return
                     }
                     let lines = found.map { cookie -> String in
-                        var parts = ["\(cookie.name)=\(cookie.value) — \(cookie.domain)\(cookie.path)"]
+                        var parts = ["\(cookie.name) — \(cookie.domain)\(cookie.path)"]
                         if let expires = cookie.expiresDate {
                             parts.append("berlaku s.d. \(expires.formatted(date: .abbreviated, time: .shortened))")
                         } else {
@@ -513,11 +527,93 @@ enum AgentToolRunner {
                         if cookie.isHTTPOnly { parts.append("httpOnly") }
                         return parts.joined(separator: ", ")
                     }
-                    var text = lines.joined(separator: "\n")
+                    continuation.resume(returning: lines.joined(separator: "\n") + "\n(Nilai cookie tidak dikirim ke model — hanya nama, domain, dan masa berlakunya.)")
+                }
+            }
+        }
+    }
+
+    /// localStorage + sessionStorage of the active tab, through the
+    /// same storageDump bridge the DevTools panel uses. The bridge
+    /// also reads document.cookie, but that value is discarded here
+    /// on purpose — cookie values are never sent to the model.
+    private static func storage(store: DownloadStore) async -> String {
+        await withCheckedContinuation { continuation in
+            Task { @MainActor in
+                guard let session = store.browserSession,
+                      session.webViews[session.selectedID] != nil else {
+                    continuation.resume(returning: "Browser tidak sedang aktif.")
+                    return
+                }
+                session.fetchStorageDump { _, local, sess in
+                    var parts: [String] = []
+                    if local.isEmpty {
+                        parts.append("localStorage: (kosong)")
+                    } else {
+                        parts.append("localStorage:")
+                        for key in local.keys.sorted() {
+                            parts.append("  \(key) = \(local[key] ?? "")")
+                        }
+                    }
+                    if sess.isEmpty {
+                        parts.append("sessionStorage: (kosong)")
+                    } else {
+                        parts.append("sessionStorage:")
+                        for key in sess.keys.sorted() {
+                            parts.append("  \(key) = \(sess[key] ?? "")")
+                        }
+                    }
+                    var text = parts.joined(separator: "\n")
                     if text.count > 8000 {
                         text = String(text.prefix(8000)) + "\n…(dipotong)"
                     }
                     continuation.resume(returning: text)
+                }
+            }
+        }
+    }
+
+    private static func pageInfo(store: DownloadStore) async -> String {
+        await withCheckedContinuation { continuation in
+            Task { @MainActor in
+                guard let session = store.browserSession,
+                      session.webViews[session.selectedID] != nil else {
+                    continuation.resume(returning: "Browser tidak sedang aktif.")
+                    return
+                }
+                session.fetchPageInfo { info in
+                    var lines: [String] = []
+                    if let tab = session.selectedTab {
+                        lines.append("URL: \(tab.urlString.isEmpty ? "(tab baru)" : tab.urlString)")
+                    }
+                    if let title = info["title"] as? String, !title.isEmpty {
+                        lines.append("Judul: \(title)")
+                    }
+                    if let ua = info["ua"] as? String, !ua.isEmpty {
+                        lines.append("User-Agent: \(ua)")
+                    }
+                    if let width = (info["width"] as? NSNumber)?.intValue,
+                       let height = (info["height"] as? NSNumber)?.intValue {
+                        lines.append("Viewport: \(width)×\(height)")
+                    }
+                    if let dpr = info["dpr"] as? NSNumber {
+                        lines.append("DPR: \(dpr)")
+                    }
+                    if let charset = info["charset"] as? String, !charset.isEmpty {
+                        lines.append("Charset: \(charset)")
+                    }
+                    if let nav = info["nav"] as? [String: Any],
+                       let duration = (nav["duration"] as? NSNumber)?.intValue {
+                        var timing = "Waktu muat: \(duration) ms"
+                        if let dom = (nav["domContentLoaded"] as? NSNumber)?.intValue {
+                            timing += ", DOMContentLoaded \(dom) ms"
+                        }
+                        if let load = (nav["load"] as? NSNumber)?.intValue {
+                            timing += ", load \(load) ms"
+                        }
+                        lines.append(timing)
+                    }
+                    continuation.resume(returning: lines.isEmpty ? "Info halaman tidak tersedia." : lines.joined(separator: "\n"))
                 }
             }
         }
