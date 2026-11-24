@@ -107,21 +107,21 @@ enum AgentToolRunner {
         case "write_file":
             return writeFile(path: arguments["path"] as? String ?? "", content: arguments["content"] as? String ?? "")
         case "list_downloads":
-            return await MainActor.run { listDownloads(store: store) }
+            return await listDownloads(store: store)
         case "manage_download":
-            return await MainActor.run { manageDownload(id: arguments["id"] as? String ?? "", action: arguments["action"] as? String ?? "", store: store) }
+            return await manageDownload(id: arguments["id"] as? String ?? "", action: arguments["action"] as? String ?? "", store: store)
         case "add_download":
-            return await MainActor.run { addDownload(url: arguments["url"] as? String ?? "", fileName: arguments["fileName"] as? String, store: store) }
+            return await addDownload(url: arguments["url"] as? String ?? "", fileName: arguments["fileName"] as? String, store: store)
         case "list_tabs":
-            return await MainActor.run { listTabs(store: store) }
+            return await listTabs(store: store)
         case "open_url":
-            return await MainActor.run { openURL(arguments["url"] as? String ?? "", store: store) }
+            return await openURL(arguments["url"] as? String ?? "", store: store)
         case "get_page_text":
             return await pageText(store: store)
         case "fetch_url":
             return await fetchURL(arguments["url"] as? String ?? "")
         case "app_info":
-            return await MainActor.run { appInfo(store: store) }
+            return await appInfo(store: store)
         default:
             return "Perkakas tidak dikenal: \(name)."
         }
@@ -201,6 +201,11 @@ enum AgentToolRunner {
 
     // MARK: - Downloads
 
+    /// DownloadStore is main-actor-isolated: every helper below
+    /// that touches it must be @MainActor itself — calling a
+    /// nonisolated helper from a MainActor.run closure does NOT make
+    /// its body main-actor-isolated (run #142 failed on exactly this).
+    @MainActor
     private static func listDownloads(store: DownloadStore) -> String {
         if store.items.isEmpty { return "Belum ada download." }
         return store.items.enumerated().prefix(30).map { index, item in
@@ -215,6 +220,7 @@ enum AgentToolRunner {
         return items.first { $0.id.uuidString.lowercased().hasPrefix(needle) }
     }
 
+    @MainActor
     private static func manageDownload(id: String, action: String, store: DownloadStore) -> String {
         guard let item = findDownload(id: id, in: store.items) else {
             return "Download tidak ditemukan: \(id). Lihat dulu list_downloads."
@@ -231,6 +237,7 @@ enum AgentToolRunner {
         return "\(item.fileName): \(state.map { "\($0)" } ?? action)."
     }
 
+    @MainActor
     private static func addDownload(url: String, fileName: String?, store: DownloadStore) -> String {
         let name = fileName?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let item = store.addItem(urlString: url, fileName: name?.isEmpty == false ? name : nil) else {
@@ -241,6 +248,7 @@ enum AgentToolRunner {
 
     // MARK: - Browser tabs
 
+    @MainActor
     private static func listTabs(store: DownloadStore) -> String {
         guard let session = store.browserSession else {
             return "Browser tidak sedang aktif."
@@ -254,6 +262,7 @@ enum AgentToolRunner {
         }.joined(separator: "\n")
     }
 
+    @MainActor
     private static func openURL(_ urlString: String, store: DownloadStore) -> String {
         guard let session = store.browserSession else {
             return "Browser tidak sedang aktif."
@@ -329,6 +338,7 @@ enum AgentToolRunner {
             .joined(separator: "\n")
     }
 
+    @MainActor
     private static func appInfo(store: DownloadStore) -> String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         var counts: [String: Int] = [:]
