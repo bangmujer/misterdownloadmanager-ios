@@ -63,6 +63,12 @@ struct AIChatView: View {
                         }
                         .padding(16)
                     }
+                    // Keyboard dismissal: drag the messages down to
+                    // dismiss interactively (like any chat app), or tap
+                    // a message — otherwise the keyboard covers the tab
+                    // bar and the user cannot switch tabs.
+                    .scrollDismissesKeyboard(.interactively)
+                    .onTapGesture { inputFocused = false }
                     .onChange(of: messages) { _ in
                         if let last = messages.last {
                             withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
@@ -144,11 +150,19 @@ struct AIChatView: View {
                         Label("Pengaturan AI", systemImage: "gearshape")
                     }
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button { inputFocused = false } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .accessibilityLabel("Sembunyikan keyboard")
+                    }
+                }
             }
             .sheet(isPresented: $showingSettings) {
                 AIChatSettingsView(provider: $provider, model: $model, endpoint: $endpoint, apiKey: $apiKey, keySaved: $keySaved)
             }
         }
+        .onDisappear { inputFocused = false }
         .onAppear {
             provider = AIProvider(rawValue: store.browserSettings.aiChatProvider) ?? .custom
             if provider == .meta { provider = .custom }
