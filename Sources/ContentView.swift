@@ -2,9 +2,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Bottom tab bar (like the reference browser app): Downloads,
-/// Browser, AI chat, My Files, Settings.
+/// Browser, AI chat, My Files, Settings, API Tester.
 enum AppTab: Hashable {
-    case downloads, browser, ai, files, settings, lainnya
+    case downloads, browser, ai, files, settings, api
 }
 
 struct ContentView: View {
@@ -61,9 +61,9 @@ struct ContentView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppTab.settings)
 
-            LainnyaView()
-                .tabItem { Label("Lainnya", systemImage: "ellipsis.circle") }
-                .tag(AppTab.lainnya)
+            ApiTesterView()
+                .tabItem { Label("API Tester", systemImage: "bolt.horizontal.circle") }
+                .tag(AppTab.api)
         }
         .onChange(of: store.aiHandoff) { handoff in
             if handoff != nil { selectedTab = .ai }
