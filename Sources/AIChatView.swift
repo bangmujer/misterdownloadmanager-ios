@@ -733,7 +733,7 @@ private struct AIChatSettingsView: View {
 
     /// API providers only: Meta has no public API, so it cannot chat
     /// from inside the app and is not offered here.
-    private var providers: [AIProvider] { [.gemini, .chatgpt, .claude, .custom] }
+    private var providers: [AIProvider] { [.gemini, .chatgpt, .claude, .balitech, .custom] }
 
     var body: some View {
         NavigationStack {

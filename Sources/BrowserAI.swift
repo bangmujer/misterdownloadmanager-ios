@@ -21,8 +21,13 @@ enum AIProvider: String, CaseIterable, Identifiable {
     case gemini = "Gemini"
     case chatgpt = "ChatGPT"
     case claude = "Claude"
+    case balitech = "Balitech"
     case custom = "Custom"
     case meta = "Muse"
+
+    /// Balitech's fixed gateway base URL — unlike Custom, the
+    /// endpoint is not user-editable.
+    static let balitechBaseURL = "https://balitechsolution.com/v3"
 
     var id: String { rawValue }
     var displayName: String { rawValue }
@@ -34,6 +39,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
         case .gemini: return "gemini-2.0-flash"
         case .chatgpt: return "gpt-4o-mini"
         case .claude: return "claude-3-5-haiku-20241022"
+        case .balitech: return "deepseek-v4.1-flash"
         case .custom: return "deepseek-v4.1-flash"
         case .meta: return ""
         }
@@ -44,6 +50,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
         case .gemini: return "https://aistudio.google.com/apikey"
         case .chatgpt: return "https://platform.openai.com/api-keys"
         case .claude: return "https://console.anthropic.com/settings/keys"
+        case .balitech: return "https://console.balitechsolution.com"
         case .custom: return nil
         case .meta: return nil
         }
@@ -54,6 +61,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
         case .gemini: return "Gratis (ada limit harian) — ambil di Google AI Studio."
         case .chatgpt: return "Berbayar — butuh saldo di akun OpenAI."
         case .claude: return "Berbayar — butuh saldo di akun Anthropic."
+        case .balitech: return "Gateway Balitechsolution (format OpenAI) — endpoint sudah diatur, isi model dan API key di bawah. Hanya request teks; gambar ditolak gateway-nya."
         case .custom: return "Endpoint sendiri yang kompatibel dengan OpenAI (format chat/completions). Isi URL dasar, model, dan API key di bawah."
         case .meta: return "Meta tidak menyediakan API publik untuk asisten Meta AI."
         }
@@ -311,12 +319,16 @@ enum AIClient {
                 "contents": contents,
             ])
             return req
-        case .chatgpt, .custom:
+        case .chatgpt, .custom, .balitech:
             // Same OpenAI chat/completions shape as makeRequest; Custom
-            // just points it at the user's own base URL.
+            // points it at the user's own base URL, Balitech at the
+            // fixed Balitechsolution gateway.
             let urlString: String
             if provider == .custom {
                 guard let url = chatCompletionsURL(baseURL: endpoint) else { return nil }
+                urlString = url.absoluteString
+            } else if provider == .balitech {
+                guard let url = chatCompletionsURL(baseURL: AIProvider.balitechBaseURL) else { return nil }
                 urlString = url.absoluteString
             } else {
                 urlString = "https://api.openai.com/v1/chat/completions"
@@ -432,12 +444,16 @@ enum AIClient {
             }
             req.httpBody = try? JSONSerialization.data(withJSONObject: ["contents": [["parts": parts]]])
             return req
-        case .chatgpt, .custom:
+        case .chatgpt, .custom, .balitech:
             // Same OpenAI chat/completions shape; Custom just points it
-            // at the user's own base URL instead of api.openai.com.
+            // at the user's own base URL instead of api.openai.com,
+            // Balitech at the fixed Balitechsolution gateway.
             let urlString: String
             if provider == .custom {
                 guard let url = chatCompletionsURL(baseURL: endpoint) else { return nil }
+                urlString = url.absoluteString
+            } else if provider == .balitech {
+                guard let url = chatCompletionsURL(baseURL: AIProvider.balitechBaseURL) else { return nil }
                 urlString = url.absoluteString
             } else {
                 urlString = "https://api.openai.com/v1/chat/completions"
@@ -558,7 +574,7 @@ enum AIClient {
                   let firstPart = parts.first,
                   let text = firstPart["text"] as? String else { return nil }
             return text
-        case .chatgpt, .custom:
+        case .chatgpt, .custom, .balitech:
             guard let choices = json["choices"] as? [[String: Any]],
                   let first = choices.first,
                   let delta = first["delta"] as? [String: Any],
