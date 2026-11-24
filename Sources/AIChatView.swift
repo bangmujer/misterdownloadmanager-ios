@@ -13,14 +13,16 @@ private struct AIChatMessage: Identifiable, Equatable {
     let id: UUID
     var role: String // "user" or "assistant"
     var text: String
+    var attachment: AIAttachment?
 
     // Explicit init: the synthesized memberwise init does not expose
     // `id` (it has a default value), and the streaming path needs to
     // construct a message with a known id to append tokens to.
-    init(id: UUID = UUID(), role: String, text: String) {
+    init(id: UUID = UUID(), role: String, text: String, attachment: AIAttachment? = nil) {
         self.id = id
         self.role = role
         self.text = text
+        self.attachment = attachment
     }
 }
 
@@ -37,6 +39,8 @@ struct AIChatView: View {
     @State private var isLoading = false
     @State private var errorText: String?
     @State private var showingSettings = false
+    @State private var attachment: AIAttachment?
+    @State private var attachmentPicker = AIAttachmentPicker()
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -72,7 +76,36 @@ struct AIChatView: View {
                         .padding(.horizontal, 16).padding(.vertical, 8)
                         .background(Color(.secondarySystemBackground))
                 }
+                if let att = attachment {
+                    HStack(spacing: 8) {
+                        if att.isImage, let uiImage = UIImage(data: att.data) {
+                            Image(uiImage: uiImage).resizable().scaledToFill()
+                                .frame(width: 40, height: 40).clipShape(RoundedRectangle(cornerRadius: 8))
+                        } else {
+                            Image(systemName: "doc.fill").font(.title3).foregroundStyle(.secondary)
+                                .frame(width: 40, height: 40)
+                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(att.fileName).font(.subheadline).lineLimit(1)
+                            Text(att.displaySize).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button { attachment = nil } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 12).padding(.top, 8)
+                }
                 HStack(alignment: .bottom, spacing: 8) {
+                    Button { pickPhoto() } label: { Image(systemName: "photo") }
+                        .font(.system(size: 20))
+                        .frame(width: 38, height: 38)
+                        .disabled(isLoading)
+                    Button { pickFile() } label: { Image(systemName: "folder") }
+                        .font(.system(size: 20))
+                        .frame(width: 38, height: 38)
+                        .disabled(isLoading)
                     TextField("Tulis pesan…", text: $draft, axis: .vertical)
                         .lineLimit(1...4)
                         .focused($inputFocused)
@@ -152,14 +185,32 @@ struct AIChatView: View {
     private func bubble(_ message: AIChatMessage) -> some View {
         HStack {
             if message.role == "user" { Spacer(minLength: 48) }
-            Text(message.text)
-                .textSelection(.enabled)
-                .padding(.horizontal, 12).padding(.vertical, 9)
-                .background(
-                    message.role == "user" ? Color.accentColor : Color(.secondarySystemBackground),
-                    in: RoundedRectangle(cornerRadius: 16)
-                )
-                .foregroundStyle(message.role == "user" ? .white : .primary)
+            VStack(alignment: message.role == "user" ? .trailing : .leading, spacing: 6) {
+                if let att = message.attachment {
+                    if att.isImage, let uiImage = UIImage(data: att.data) {
+                        Image(uiImage: uiImage).resizable().scaledToFit()
+                            .frame(maxWidth: 220, maxHeight: 220)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: "doc.fill")
+                            Text(att.fileName).lineLimit(1)
+                            Text(att.displaySize).foregroundStyle(.secondary)
+                        }
+                        .font(.caption)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Color(.tertiarySystemBackground), in: Capsule())
+                    }
+                }
+                Text(message.text)
+                    .textSelection(.enabled)
+                    .padding(.horizontal, 12).padding(.vertical, 9)
+                    .background(
+                        message.role == "user" ? Color.accentColor : Color(.secondarySystemBackground),
+                        in: RoundedRectangle(cornerRadius: 16)
+                    )
+                    .foregroundStyle(message.role == "user" ? .white : .primary)
+            }
             if message.role == "assistant" { Spacer(minLength: 48) }
         }
         .frame(maxWidth: .infinity, alignment: message.role == "user" ? .trailing : .leading)
@@ -171,7 +222,7 @@ struct AIChatView: View {
     }
 
     private var canSend: Bool {
-        !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachment != nil)
             && !isLoading && !apiKey.isEmpty && !model.isEmpty && !missingEndpoint
     }
 
@@ -183,9 +234,36 @@ struct AIChatView: View {
         keySaved = !saved.isEmpty
     }
 
+    private func pickPhoto() {
+        attachmentPicker.presentPhoto { data, name in
+            guard data.count <= 30 * 1024 * 1024 else {
+                errorText = "Foto terlalu besar (maks 30 MB)."
+                return
+            }
+            attachment = AIAttachment.fromPickedData(fileName: name, data: data)
+        }
+    }
+
+    private func pickFile() {
+        attachmentPicker.presentFile { url in
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let data = try? Data(contentsOf: url) else {
+                errorText = "File tidak bisa dibaca."
+                return
+            }
+            guard data.count <= 20 * 1024 * 1024 else {
+                errorText = "File terlalu besar (maks 20 MB)."
+                return
+            }
+            attachment = AIAttachment.fromPickedData(fileName: url.lastPathComponent, data: data)
+        }
+    }
+
     private func send() {
         let q = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty, !isLoading else { return }
+        let att = attachment
+        guard !isLoading, !q.isEmpty || att != nil else { return }
         guard !apiKey.isEmpty else {
             errorText = "Masukkan API key \(provider.displayName) dulu — kuncinya disimpan di Keychain perangkat ini."
             return
@@ -198,15 +276,21 @@ struct AIChatView: View {
             errorText = "Isi URL endpoint dulu."
             return
         }
+        let userText = q.isEmpty ? "Jelaskan lampiran ini." : q
         draft = ""
+        attachment = nil
         errorText = nil
-        messages.append(AIChatMessage(role: "user", text: q))
+        messages.append(AIChatMessage(role: "user", text: userText, attachment: att))
         let id = UUID()
         streamingID = id
         isLoading = true
-        let history = messages.map { (role: $0.role, text: $0.text) }
+        // Older attached messages keep only a name note in the history;
+        // the fresh attachment rides as a media part on the newest message.
+        let history: [(role: String, text: String)] = messages.dropLast().map { m -> (role: String, text: String) in
+            (role: m.role, text: m.text + (m.attachment.map { " [Lampiran: \($0.fileName)]" } ?? ""))
+        } + [(role: "user", text: userText)]
         AIClient.askChat(
-            provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, messages: history,
+            provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: att, messages: history,
             onToken: { token in
                 if let idx = messages.firstIndex(where: { $0.id == id }) {
                     messages[idx].text += token

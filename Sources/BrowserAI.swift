@@ -113,7 +113,7 @@ enum KeychainHelper {
 /// text into the prompt; PDFs go to the model as base64 documents where
 /// the provider supports them; anything else reaches the model as name,
 /// type and size only.
-struct AIAttachment {
+struct AIAttachment: Equatable {
     var fileName: String
     var mimeType: String
     var data: Data
@@ -242,26 +242,49 @@ enum AIClient {
     /// history (roles "user"/"assistant", oldest first) is sent, so the
     /// model keeps context across turns. Same streaming path as `ask`.
     static func askChat(provider: AIProvider, model: String, apiKey: String, endpoint: String = "",
+                        attachment: AIAttachment? = nil,
                         messages: [(role: String, text: String)],
                         onToken: @escaping (String) -> Void,
                         onDone: @escaping (String?) -> Void) {
-        guard let request = makeChatRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, messages: messages) else {
+        guard let request = makeChatRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: attachment, messages: messages) else {
             onDone("Tidak bisa membuat permintaan untuk \(provider.displayName).")
             return
         }
         stream(request: request, provider: provider, onToken: onToken, onDone: onDone)
     }
 
-    private static func makeChatRequest(provider: AIProvider, model: String, apiKey: String, endpoint: String, messages: [(role: String, text: String)]) -> URLRequest? {
+    /// Text for the newest chat message when it carries an attachment.
+    /// Images/PDFs ride as media parts (handled per provider in
+    /// makeChatRequest), so the text stays as-is; readable text files
+    /// and other binaries are described in the text itself, mirroring
+    /// buildPrompt.
+    private static func textWithAttachmentNote(_ text: String, attachment: AIAttachment?, mediaAttached: Bool) -> String {
+        guard let attachment, !mediaAttached else { return text }
+        if let readable = attachment.readableText {
+            return text + "\n\nLampiran file \(attachment.fileName):\n\(readable)"
+        }
+        return text + "\n[Lampiran: file \(attachment.fileName) (\(attachment.mimeType), \(attachment.displaySize))]"
+    }
+
+    private static func makeChatRequest(provider: AIProvider, model: String, apiKey: String, endpoint: String, attachment: AIAttachment?, messages: [(role: String, text: String)]) -> URLRequest? {
         let system = "Kamu adalah asisten AI di dalam aplikasi Mister Download Manager. Jawablah dalam bahasa yang sama dengan pesan pengguna, ringkas tapi lengkap."
         let recent = Array(messages.suffix(20))
+        let media = attachment.flatMap { $0.isImage || $0.isPDF ? $0 : nil }
+        let lastText = textWithAttachmentNote(recent.last?.text ?? "", attachment: attachment, mediaAttached: media != nil)
+        let lastIndex = max(0, recent.count - 1)
         switch provider {
         case .gemini:
             guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):streamGenerateContent?alt=sse&key=\(apiKey)") else { return nil }
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            let contents: [[String: Any]] = recent.map { ["role": $0.role == "assistant" ? "model" : "user", "parts": [["text": $0.text]]] }
+            let contents: [[String: Any]] = recent.enumerated().map { idx, msg -> [String: Any] in
+                var parts: [[String: Any]] = [["text": idx == lastIndex ? lastText : msg.text]]
+                if idx == lastIndex, let media {
+                    parts.append(["inline_data": ["mime_type": media.mimeType, "data": media.data.base64EncodedString()]])
+                }
+                return ["role": msg.role == "assistant" ? "model" : "user", "parts": parts]
+            }
             req.httpBody = try? JSONSerialization.data(withJSONObject: [
                 "systemInstruction": ["parts": [["text": system]]],
                 "contents": contents,
@@ -283,7 +306,24 @@ enum AIClient {
             req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             var apiMessages: [[String: Any]] = [["role": "system", "content": system]]
-            apiMessages += recent.map { ["role": $0.role, "content": $0.text] }
+            apiMessages += recent.enumerated().map { idx, msg -> [String: Any] in
+                if idx == lastIndex, let media {
+                    let content: [[String: Any]]
+                    if media.isImage {
+                        content = [
+                            ["type": "text", "text": lastText],
+                            ["type": "image_url", "image_url": ["url": "data:\(media.mimeType);base64,\(media.data.base64EncodedString())"]],
+                        ]
+                    } else {
+                        content = [
+                            ["type": "text", "text": lastText],
+                            ["type": "file", "file": ["filename": media.fileName, "file_data": "data:application/pdf;base64,\(media.data.base64EncodedString())"]],
+                        ]
+                    }
+                    return ["role": msg.role, "content": content]
+                }
+                return ["role": msg.role, "content": idx == lastIndex ? lastText : msg.text]
+            }
             req.httpBody = try? JSONSerialization.data(withJSONObject: [
                 "model": model, "stream": true, "messages": apiMessages,
             ])
@@ -298,7 +338,24 @@ enum AIClient {
             req.httpBody = try? JSONSerialization.data(withJSONObject: [
                 "model": model, "max_tokens": 2048, "stream": true,
                 "system": system,
-                "messages": recent.map { ["role": $0.role, "content": $0.text] },
+                "messages": recent.enumerated().map { idx, msg -> [String: Any] in
+                    if idx == lastIndex, let media {
+                        let content: [[String: Any]]
+                        if media.isImage {
+                            content = [
+                                ["type": "image", "source": ["type": "base64", "media_type": media.mimeType, "data": media.data.base64EncodedString()]],
+                                ["type": "text", "text": lastText],
+                            ]
+                        } else {
+                            content = [
+                                ["type": "document", "source": ["type": "base64", "media_type": "application/pdf", "data": media.data.base64EncodedString()]],
+                                ["type": "text", "text": lastText],
+                            ]
+                        }
+                        return ["role": msg.role, "content": content]
+                    }
+                    return ["role": msg.role, "content": idx == lastIndex ? lastText : msg.text]
+                },
             ])
             return req
         case .meta:
