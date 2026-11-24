@@ -272,6 +272,12 @@ struct BrowserSettings: Codable {
     // (the Ask AI sheet): the chat tab defaults to the OpenAI-compatible
     // Custom endpoint.
     var aiChatProvider: String = "Custom"
+
+    /// Agent mode in the AI chat tab: when on, the model may call the
+    /// app's own tools (files, downloads, tabs, URL fetch) on
+    /// OpenAI-shape providers. Defaulted so older saved settings
+    /// still decode.
+    var aiAgentToolsEnabled: Bool = true
 }
 
 // MARK: - User-agent templates ("tinggal pilih")
@@ -3128,6 +3134,8 @@ struct BrowserView: View {
             }
         }
         .onAppear {
+            // The AI agent tools reach the live tabs through the store.
+            store.browserSession = session
             // Chrome clearance for scroll + bottom-bar lift, from the
             // measured stack height (see refreshBottomInset).
             bottomSafeInset = geo.safeAreaInsets.bottom

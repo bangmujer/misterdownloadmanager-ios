@@ -25,6 +25,11 @@ final class DownloadStore: ObservableObject {
     /// sheet / Open in), so the UI can confirm the import.
     @Published var lastImportMessage: String?
     @Published var aiHandoff: AIChatHandoff?
+
+    /// The live browser session, set by BrowserView on appear. Lets
+    /// the AI agent tools list tabs and read the current page. Weak:
+    /// the browser view owns the session.
+    weak var browserSession: BrowserSession?
     @Published var browserHistory: [BrowserHistoryEntry] = []
     /// Saved website logins (passwords live in the Keychain, metadata in
     /// a JSON file). Changes forward to this store's objectWillChange so

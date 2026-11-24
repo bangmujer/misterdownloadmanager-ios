@@ -279,6 +279,10 @@ struct AIChatView: View {
             }
             Text("Chat tersimpan di perangkat ini — buka sidebar untuk melihat proyek dan chat lama.")
                 .font(.caption).foregroundStyle(.secondary)
+            if agentToolsActive {
+                Text("Mode agen aktif: AI bisa memeriksa file, download, dan tab browser lewat perkakas.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             // Build stamp, so a screenshot always proves which build is installed.
             Text("Build \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
                 .font(.caption2).foregroundStyle(.tertiary)
@@ -512,15 +516,29 @@ struct AIChatView: View {
                     }
                 }
                 if message.role == "assistant" {
-                    // Assistant answers render Markdown ChatGPT-style:
-                    // headings, bold, code blocks with a copy button,
-                    // tables, lists. Long-press selects the text, so
-                    // an answer can be blocked and copied.
-                    MarkdownChatView(text: message.text)
-                        .textSelection(.enabled)
-                        .padding(.horizontal, 12).padding(.vertical, 9)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
-                        .foregroundStyle(.primary)
+                    // Agent-mode tool calls, if any, show as a
+                    // collapsible log above the answer.
+                    VStack(alignment: .leading, spacing: 6) {
+                        if !message.toolLog.isEmpty {
+                            DisclosureGroup("Perkakas (\(message.toolLog.count))") {
+                                ForEach(message.toolLog.indices, id: \.self) { index in
+                                    Text(message.toolLog[index])
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                }
+                            }
+                            .font(.caption)
+                        }
+                        // Assistant answers render Markdown ChatGPT-style:
+                        // headings, bold, code blocks with a copy button,
+                        // tables, lists. Long-press selects the text, so
+                        // an answer can be blocked and copied.
+                        MarkdownChatView(text: message.text)
+                            .textSelection(.enabled)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 9)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+                    .foregroundStyle(.primary)
                 } else {
                     Text(message.text)
                         .textSelection(.enabled)
@@ -603,6 +621,13 @@ struct AIChatView: View {
         }
     }
 
+    /// Agent mode only exists on the OpenAI-shape providers: the
+    /// tools field is a chat/completions feature, and Gemini/Claude
+    /// use different request shapes.
+    private var agentToolsActive: Bool {
+        store.browserSettings.aiAgentToolsEnabled && [.chatgpt, .custom, .balitech].contains(provider)
+    }
+
     private func send() {
         // Confirming an edit re-sends the edited message instead of
         // appending a new one.
@@ -648,30 +673,49 @@ struct AIChatView: View {
         let history: [(role: String, text: String)] = prefix.dropLast().map { m -> (role: String, text: String) in
             (role: m.role, text: m.text + (m.attachment.map { " [Lampiran: \($0.fileName)]" } ?? ""))
         } + [(role: "user", text: userMessage.text)]
-        AIClient.askChat(
-            provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: userMessage.attachment, messages: history,
-            onToken: { token in
-                if let idx = messages.firstIndex(where: { $0.id == id }) {
-                    messages[idx].text += token
-                } else {
-                    messages.append(AIChatMessage(id: id, role: "assistant", text: token))
-                }
-            },
-            onDone: { message in
-                isLoading = false
-                streamingID = nil
-                let gotAnswer = messages.contains(where: { $0.id == id })
-                if let message {
-                    errorText = message
-                } else if !gotAnswer {
-                    errorText = "Tidak ada jawaban dari \(provider.displayName). Coba cek model dan kunci API-nya."
-                }
-                if message != nil || !gotAnswer {
-                    failedIDs.insert(userMessage.id)
-                }
-                persist()
+        let onToken: (String) -> Void = { token in
+            if let idx = messages.firstIndex(where: { $0.id == id }) {
+                messages[idx].text += token
+            } else {
+                messages.append(AIChatMessage(id: id, role: "assistant", text: token))
             }
-        )
+        }
+        let onDone: (String?) -> Void = { message in
+            isLoading = false
+            streamingID = nil
+            let gotAnswer = messages.contains(where: { $0.id == id })
+            if let message {
+                errorText = message
+            } else if !gotAnswer {
+                errorText = "Tidak ada jawaban dari \(provider.displayName). Coba cek model dan kunci API-nya."
+            }
+            if message != nil || !gotAnswer {
+                failedIDs.insert(userMessage.id)
+            }
+            persist()
+        }
+        if agentToolsActive {
+            AIClient.askChatWithTools(
+                provider: provider, model: model, apiKey: apiKey, endpoint: endpoint,
+                attachment: userMessage.attachment, messages: history,
+                tools: AgentTool.all, store: store,
+                onToken: onToken,
+                onToolActivity: { line in
+                    if let idx = messages.firstIndex(where: { $0.id == id }) {
+                        messages[idx].toolLog.append(line)
+                    } else {
+                        messages.append(AIChatMessage(id: id, role: "assistant", text: "", toolLog: [line]))
+                    }
+                },
+                onDone: onDone
+            )
+        } else {
+            AIClient.askChat(
+                provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: userMessage.attachment, messages: history,
+                onToken: onToken,
+                onDone: onDone
+            )
+        }
     }
 
     /// Re-sends a failed message with its original attachment. Any
@@ -800,6 +844,19 @@ private struct AIChatSettingsView: View {
                     if let keyURL = provider.keyURL, let url = URL(string: keyURL) {
                         Link("Dapatkan API key \(provider.displayName)…", destination: url)
                             .font(.subheadline)
+                    }
+                }
+                if [.chatgpt, .custom, .balitech].contains(provider) {
+                    Section("Perkakas AI") {
+                        Toggle("Mode agen", isOn: Binding(
+                            get: { store.browserSettings.aiAgentToolsEnabled },
+                            set: {
+                                store.browserSettings.aiAgentToolsEnabled = $0
+                                store.saveBrowserSettings()
+                            }
+                        ))
+                        Text("AI boleh memakai perkakas aplikasi: memeriksa file, download, tab browser, dan mengambil isi URL. Hanya untuk provider berformat OpenAI.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }

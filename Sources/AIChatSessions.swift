@@ -14,15 +14,19 @@ struct AIChatMessage: Identifiable, Equatable, Codable {
     var role: String // "user" or "assistant"
     var text: String
     var attachment: AIAttachment?
+    /// Agent-mode tool activity for this answer, one line per call.
+    /// Defaulted so chats saved before agent mode still decode.
+    var toolLog: [String] = []
 
     // Explicit init: the synthesized memberwise init does not expose
     // `id` (it has a default value), and the streaming path needs to
     // construct a message with a known id to append tokens to.
-    init(id: UUID = UUID(), role: String, text: String, attachment: AIAttachment? = nil) {
+    init(id: UUID = UUID(), role: String, text: String, attachment: AIAttachment? = nil, toolLog: [String] = []) {
         self.id = id
         self.role = role
         self.text = text
         self.attachment = attachment
+        self.toolLog = toolLog
     }
 }
 

@@ -329,18 +329,175 @@ enum AIClient {
     /// The Ask AI sheet reuses this for follow-up questions, passing
     /// the page context as the system prompt. Returns the streaming
     /// task so the caller can stop it (the sheet's Stop button).
+    /// `tools` is only honoured on the OpenAI-shape branch; other
+    /// providers ignore it and chat as usual.
     @discardableResult
     static func askChat(provider: AIProvider, model: String, apiKey: String, endpoint: String = "",
                         attachment: AIAttachment? = nil,
                         messages: [(role: String, text: String)],
                         systemPrompt: String? = nil,
+                        tools: [AgentTool]? = nil,
                         onToken: @escaping (String) -> Void,
                         onDone: @escaping (String?) -> Void) -> Task<Void, Never> {
-        guard let request = makeChatRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: attachment, messages: messages, systemPrompt: systemPrompt) else {
+        guard let request = makeChatRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: attachment, messages: messages, systemPrompt: systemPrompt, tools: tools) else {
             onDone("Tidak bisa membuat permintaan untuk \(provider.displayName).")
             return Task {}
         }
         return stream(request: request, provider: provider, onToken: onToken, onDone: onDone)
+    }
+
+    /// Agent mode for the AI tab: the same multi-turn chat, but the
+    /// model may call the app's own tools (files, downloads, tabs, URL
+    /// fetch) and the loop feeds each tool's result back until the
+    /// model answers with plain text, up to 5 rounds. Text tokens
+    /// stream to onToken as they arrive, exactly like plain chat;
+    /// every executed tool reports one line to onToolActivity for the
+    /// bubble's tool log. OpenAI-shape providers only (ChatGPT,
+    /// Custom, Balitech) — the caller gates the rest.
+    /// If the first round fails while `tools` were sent (a gateway
+    /// that rejects the tools field), the same turn is retried once
+    /// as plain chat instead of surfacing a tools error.
+    @discardableResult
+    static func askChatWithTools(
+        provider: AIProvider, model: String, apiKey: String, endpoint: String = "",
+        attachment: AIAttachment? = nil,
+        messages: [(role: String, text: String)],
+        systemPrompt: String? = nil,
+        tools: [AgentTool],
+        store: DownloadStore,
+        onToken: @escaping (String) -> Void,
+        onToolActivity: @escaping (String) -> Void,
+        onDone: @escaping (String?) -> Void
+    ) -> Task<Void, Never> {
+        Task {
+            let recent = Array(messages.suffix(20))
+            let media = attachment.flatMap { $0.isImage || $0.isPDF ? $0 : nil }
+            let lastText = textWithAttachmentNote(recent.last?.text ?? "", attachment: attachment, mediaAttached: media != nil)
+            var apiMessages: [[String: Any]] = [["role": "system", "content": chatSystemPrompt(systemPrompt, tools: tools)]]
+            apiMessages += openAIHistoryMessages(recent: recent, lastText: lastText, media: media)
+            var toolsEnabled = true
+            var retriedWithoutTools = false
+            for _ in 0..<5 {
+                if Task.isCancelled { break }
+                guard let request = makeOpenAIChatRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, apiMessages: apiMessages, tools: toolsEnabled ? tools : nil) else {
+                    await MainActor.run { onDone("Tidak bisa membuat permintaan untuk \(provider.displayName).") }
+                    return
+                }
+                let outcome = await runChatRound(request: request, provider: provider, onToken: onToken)
+                if let error = outcome.error {
+                    if toolsEnabled, !retriedWithoutTools {
+                        toolsEnabled = false
+                        retriedWithoutTools = true
+                        continue
+                    }
+                    await MainActor.run { onDone(error) }
+                    return
+                }
+                guard !outcome.toolCalls.isEmpty else { break }
+                var assistantEntry: [String: Any] = ["role": "assistant", "content": NSNull()]
+                assistantEntry["tool_calls"] = outcome.toolCalls.map { call -> [String: Any] in
+                    ["id": call.id, "type": "function", "function": ["name": call.name, "arguments": call.argumentsJSON]]
+                }
+                apiMessages.append(assistantEntry)
+                for call in outcome.toolCalls {
+                    if Task.isCancelled { break }
+                    let arguments = (try? JSONSerialization.jsonObject(with: Data(call.argumentsJSON.utf8)) as? [String: Any]) ?? [:]
+                    let result = await AgentToolRunner.run(name: call.name, arguments: arguments, store: store)
+                    let line = toolActivityLine(name: call.name, result: result)
+                    await MainActor.run { onToolActivity(line) }
+                    apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": result])
+                }
+            }
+            await MainActor.run { onDone(nil) }
+        }
+    }
+
+    /// One streamed tool-call delta fragment, accumulated by index:
+    /// the first fragment carries the id and name, later ones only
+    /// append to the arguments JSON string.
+    private struct PendingToolCall {
+        var id: String = ""
+        var name: String = ""
+        var argumentsJSON: String = ""
+    }
+
+    /// A single streamed chat/completions round: text tokens stream to
+    /// onToken as they arrive, and any tool calls the model emitted
+    /// are returned for execution. Mirrors `stream`'s error handling
+    /// (413 message, HTTP snippet) so agent mode fails the same way
+    /// plain chat does. Cancellation ends the round quietly.
+    private static func runChatRound(request: URLRequest, provider: AIProvider,
+                                     onToken: @escaping (String) -> Void) async -> (toolCalls: [PendingToolCall], error: String?) {
+        do {
+            let (bytes, response) = try await URLSession.shared.bytes(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return ([], "Respons tidak dikenal dari \(provider.displayName).")
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                if http.statusCode == 413 {
+                    return ([], "Lampiran terlalu besar untuk server \(provider.displayName) (HTTP 413 — badan request melebihi batas gateway). Coba kirim foto/file yang lebih kecil.")
+                }
+                var body = ""
+                for try await line in bytes.lines { body += line + "\n" }
+                let snippet = String(body.prefix(300))
+                return ([], "Error HTTP \(http.statusCode) dari \(provider.displayName): \(snippet)")
+            }
+            var calls: [Int: PendingToolCall] = [:]
+            for try await line in bytes.lines {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard trimmed.hasPrefix("data:") else { continue }
+                let payload = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                if payload == "[DONE]" { break }
+                guard let data = payload.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                if let deltaText = extractDelta(provider: provider, json: json), !deltaText.isEmpty {
+                    let token = deltaText
+                    await MainActor.run { onToken(token) }
+                }
+                if let fragments = toolCallFragments(json: json) {
+                    for (index, id, name, arguments) in fragments {
+                        var call = calls[index] ?? PendingToolCall()
+                        if !id.isEmpty { call.id = id }
+                        if !name.isEmpty { call.name = name }
+                        call.argumentsJSON += arguments
+                        calls[index] = call
+                    }
+                }
+            }
+            let ordered = calls.keys.sorted().compactMap { index -> PendingToolCall? in
+                guard var call = calls[index], !call.name.isEmpty else { return nil }
+                if call.id.isEmpty { call.id = "call_\(index)" }
+                return call
+            }
+            return (ordered, nil)
+        } catch {
+            if Task.isCancelled { return ([], nil) }
+            return ([], error.localizedDescription)
+        }
+    }
+
+    /// Tool-call fragments from one OpenAI-shape SSE delta:
+    /// choices[0].delta.tool_calls[i] = {index, id, function:{name,
+    /// arguments}}. Anything else returns nil.
+    private static func toolCallFragments(json: [String: Any]) -> [(index: Int, id: String, name: String, arguments: String)]? {
+        guard let choices = json["choices"] as? [[String: Any]],
+              let first = choices.first,
+              let delta = first["delta"] as? [String: Any],
+              let rawCalls = delta["tool_calls"] as? [[String: Any]] else { return nil }
+        return rawCalls.compactMap { raw in
+            guard let index = raw["index"] as? Int else { return nil }
+            let id = raw["id"] as? String ?? ""
+            let function = raw["function"] as? [String: Any] ?? [:]
+            return (index, id, function["name"] as? String ?? "", function["arguments"] as? String ?? "")
+        }
+    }
+
+    /// One line for the chat's tool log: the tool name plus the first
+    /// line of its result, so a file listing does not flood the bubble.
+    private static func toolActivityLine(name: String, result: String) -> String {
+        let first = result.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? ""
+        let single = first.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String("\(name): \(single)".prefix(160))
     }
 
     /// Text for the newest chat message when it carries an attachment.
@@ -356,8 +513,73 @@ enum AIClient {
         return text + "\n[Lampiran: file \(attachment.fileName) (\(attachment.mimeType), \(attachment.displaySize))]"
     }
 
-    private static func makeChatRequest(provider: AIProvider, model: String, apiKey: String, endpoint: String, attachment: AIAttachment?, messages: [(role: String, text: String)], systemPrompt: String? = nil) -> URLRequest? {
-        let system = systemPrompt ?? "Kamu adalah asisten AI serba bisa. Jawablah pertanyaan apa pun tentang topik apa pun, tanpa batasan topik — tidak terbatas pada aplikasi ini. Jawablah dalam bahasa yang sama dengan pesan pengguna, ringkas tapi lengkap."
+    /// The system prompt for multi-turn chat. `systemPrompt`
+    /// overrides the generic any-topic prompt (the Ask AI sheet passes
+    /// the page context); agent mode appends the tools instruction.
+    private static func chatSystemPrompt(_ systemPrompt: String?, tools: [AgentTool]? = nil) -> String {
+        var prompt = systemPrompt ?? "Kamu adalah asisten AI serba bisa. Jawablah pertanyaan apa pun tentang topik apa pun, tanpa batasan topik — tidak terbatas pada aplikasi ini. Jawablah dalam bahasa yang sama dengan pesan pengguna, ringkas tapi lengkap."
+        if tools != nil {
+            prompt += "\n\nKamu dapat memakai perkakas (tools) yang disediakan untuk memeriksa keadaan aplikasi ini — file, download, tab browser, dan isi URL — sebelum menjawab. Pakailah perkakas saat pertanyaan membutuhkan data nyata dari aplikasi, jangan menebak. Sebutkan dengan singkat perkakas apa yang kamu pakai dan apa hasilnya."
+        }
+        return prompt
+    }
+
+    /// History messages in the OpenAI chat/completions shape. The
+    /// newest message carries the attachment as a media part when it
+    /// is an image or PDF; older attachments ride as name notes (the
+    /// caller folds those into the history text).
+    private static func openAIHistoryMessages(recent: [(role: String, text: String)], lastText: String, media: AIAttachment?) -> [[String: Any]] {
+        let lastIndex = max(0, recent.count - 1)
+        return recent.enumerated().map { idx, msg -> [String: Any] in
+            if idx == lastIndex, let media {
+                let content: [[String: Any]]
+                if media.isImage {
+                    content = [
+                        ["type": "text", "text": lastText],
+                        ["type": "image_url", "image_url": ["url": "data:\(media.mimeType);base64,\(media.data.base64EncodedString())"]],
+                    ]
+                } else {
+                    content = [
+                        ["type": "text", "text": lastText],
+                        ["type": "file", "file": ["filename": media.fileName, "file_data": "data:application/pdf;base64,\(media.data.base64EncodedString())"]],
+                    ]
+                }
+                return ["role": msg.role, "content": content]
+            }
+            return ["role": msg.role, "content": idx == lastIndex ? lastText : msg.text]
+        }
+    }
+
+    /// POSTs to an OpenAI chat/completions URL (OpenAI itself, a
+    /// Custom base URL, or the fixed Balitech gateway), with an
+    /// optional `tools` array for agent mode.
+    private static func makeOpenAIChatRequest(provider: AIProvider, model: String, apiKey: String, endpoint: String, apiMessages: [[String: Any]], tools: [AgentTool]? = nil) -> URLRequest? {
+        let urlString: String
+        if provider == .custom {
+            guard let url = chatCompletionsURL(baseURL: endpoint) else { return nil }
+            urlString = url.absoluteString
+        } else if provider == .balitech {
+            guard let url = chatCompletionsURL(baseURL: AIProvider.balitechBaseURL) else { return nil }
+            urlString = url.absoluteString
+        } else {
+            urlString = "https://api.openai.com/v1/chat/completions"
+        }
+        guard let url = URL(string: urlString) else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["model": model, "stream": true, "messages": apiMessages]
+        if let tools, !tools.isEmpty {
+            body["tools"] = tools.map(\.schema)
+            body["tool_choice"] = "auto"
+        }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        return req
+    }
+
+    private static func makeChatRequest(provider: AIProvider, model: String, apiKey: String, endpoint: String, attachment: AIAttachment?, messages: [(role: String, text: String)], systemPrompt: String? = nil, tools: [AgentTool]? = nil) -> URLRequest? {
+        let system = chatSystemPrompt(systemPrompt, tools: tools)
         let recent = Array(messages.suffix(20))
         let media = attachment.flatMap { $0.isImage || $0.isPDF ? $0 : nil }
         let lastText = textWithAttachmentNote(recent.last?.text ?? "", attachment: attachment, mediaAttached: media != nil)
@@ -384,44 +606,9 @@ enum AIClient {
             // Same OpenAI chat/completions shape as makeRequest; Custom
             // points it at the user's own base URL, Balitech at the
             // fixed Balitechsolution gateway.
-            let urlString: String
-            if provider == .custom {
-                guard let url = chatCompletionsURL(baseURL: endpoint) else { return nil }
-                urlString = url.absoluteString
-            } else if provider == .balitech {
-                guard let url = chatCompletionsURL(baseURL: AIProvider.balitechBaseURL) else { return nil }
-                urlString = url.absoluteString
-            } else {
-                urlString = "https://api.openai.com/v1/chat/completions"
-            }
-            guard let url = URL(string: urlString) else { return nil }
-            var req = URLRequest(url: url)
-            req.httpMethod = "POST"
-            req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            var apiMessages: [[String: Any]] = [["role": "system", "content": system]]
-            apiMessages += recent.enumerated().map { idx, msg -> [String: Any] in
-                if idx == lastIndex, let media {
-                    let content: [[String: Any]]
-                    if media.isImage {
-                        content = [
-                            ["type": "text", "text": lastText],
-                            ["type": "image_url", "image_url": ["url": "data:\(media.mimeType);base64,\(media.data.base64EncodedString())"]],
-                        ]
-                    } else {
-                        content = [
-                            ["type": "text", "text": lastText],
-                            ["type": "file", "file": ["filename": media.fileName, "file_data": "data:application/pdf;base64,\(media.data.base64EncodedString())"]],
-                        ]
-                    }
-                    return ["role": msg.role, "content": content]
-                }
-                return ["role": msg.role, "content": idx == lastIndex ? lastText : msg.text]
-            }
-            req.httpBody = try? JSONSerialization.data(withJSONObject: [
-                "model": model, "stream": true, "messages": apiMessages,
-            ])
-            return req
+            let apiMessages: [[String: Any]] = [["role": "system", "content": system]]
+                + openAIHistoryMessages(recent: recent, lastText: lastText, media: media)
+            return makeOpenAIChatRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, apiMessages: apiMessages, tools: tools)
         case .claude:
             guard let url = URL(string: "https://api.anthropic.com/v1/messages") else { return nil }
             var req = URLRequest(url: url)
