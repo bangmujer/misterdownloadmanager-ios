@@ -818,6 +818,18 @@ private struct AIChatSettingsView: View {
                                 .autocapitalization(.none).autocorrectionDisabled()
                         }
                         Text(model).font(.caption).foregroundStyle(.secondary)
+                    } else if provider == .gemini {
+                        Picker("Model", selection: AIProvider.geminiModelPickerBinding(model: $model)) {
+                            ForEach(AIProvider.geminiModels, id: \.id) { m in
+                                Text(m.name).tag(m.id)
+                            }
+                            Text("Kustom…").tag(AIProvider.geminiCustomTag)
+                        }
+                        if !AIProvider.isGeminiCatalogModel(model) {
+                            TextField("Model", text: $model)
+                                .autocapitalization(.none).autocorrectionDisabled()
+                        }
+                        Text(model).font(.caption).foregroundStyle(.secondary)
                     } else {
                         TextField("Model", text: $model)
                             .autocapitalization(.none).autocorrectionDisabled()

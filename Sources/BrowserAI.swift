@@ -90,6 +90,52 @@ enum AIProvider: String, CaseIterable, Identifiable {
         )
     }
 
+    /// General-purpose Gemini chat/text models from Google's model
+    /// list (https://aistudio.google.com/docs/models, verified
+    /// 2026-11-24). Only models for the generateContent endpoint are
+    /// listed: Live, TTS, image, video, embedding, music, robotics
+    /// and research models use different APIs and would fail on
+    /// streamGenerateContent, so they stay reachable only through
+    /// the "Kustom…" row. Retired and deprecated models
+    /// (gemini-2.0-flash, gemini-2.5-flash, gemini-2.5-pro) are
+    /// excluded.
+    struct GeminiModel: Hashable {
+        let id: String
+        let name: String
+    }
+
+    static let geminiModels: [GeminiModel] = [
+        GeminiModel(id: "gemini-4-carbon", name: "Gemini 4 Carbon"),
+        GeminiModel(id: "gemini-4-neon", name: "Gemini 4 Neon"),
+        GeminiModel(id: "gemini-4-hydrogen", name: "Gemini 4 Hydrogen"),
+        GeminiModel(id: "gemini-4-argon", name: "Gemini 4 Argon"),
+        GeminiModel(id: "gemini-3.8-flash", name: "Gemini 3.8 Flash"),
+        GeminiModel(id: "gemini-3.6-flash", name: "Gemini 3.6 Flash"),
+        GeminiModel(id: "gemini-3.5-flash-lite", name: "Gemini 3.5 Flash-Lite"),
+        GeminiModel(id: "gemini-3.1-flash-lite", name: "Gemini 3.1 Flash-Lite"),
+        GeminiModel(id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro"),
+        GeminiModel(id: "gemini-3-flash-preview", name: "Gemini 3 Flash"),
+        GeminiModel(id: "gemini-2.5-flash-lite", name: "Gemini 2.5 Flash-Lite"),
+    ]
+
+    /// Picker tag for the "type it yourself" row. Never stored as a
+    /// model: when the stored model is not a catalog id, the picker
+    /// shows this row and the text field stays visible.
+    static let geminiCustomTag = "__kustom__"
+
+    static func isGeminiCatalogModel(_ id: String) -> Bool {
+        geminiModels.contains(where: { $0.id == id })
+    }
+
+    /// Picker selection for the Gemini model dropdown: a catalog id
+    /// selects its row, anything else selects "Kustom…".
+    static func geminiModelPickerBinding(model: Binding<String>) -> Binding<String> {
+        Binding(
+            get: { isGeminiCatalogModel(model.wrappedValue) ? model.wrappedValue : geminiCustomTag },
+            set: { if $0 != geminiCustomTag { model.wrappedValue = $0 } }
+        )
+    }
+
     var id: String { rawValue }
     var displayName: String { rawValue }
 
@@ -944,6 +990,24 @@ struct AskAIView: View {
                                 .padding(.horizontal, 12).padding(.vertical, 10)
                                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
                                 if !AIProvider.isBalitechCatalogModel(model) {
+                                    TextField("Model", text: $model)
+                                        .focused($fieldFocused)
+                                        .autocapitalization(.none).autocorrectionDisabled()
+                                        .padding(.horizontal, 12).padding(.vertical, 10)
+                                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                }
+                                Text(model).font(.caption).foregroundStyle(.secondary)
+                            } else if provider == .gemini {
+                                Picker("Model", selection: AIProvider.geminiModelPickerBinding(model: $model)) {
+                                    ForEach(AIProvider.geminiModels, id: \.id) { m in
+                                        Text(m.name).tag(m.id)
+                                    }
+                                    Text("Kustom…").tag(AIProvider.geminiCustomTag)
+                                }
+                                .pickerStyle(.menu)
+                                .padding(.horizontal, 12).padding(.vertical, 10)
+                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                if !AIProvider.isGeminiCatalogModel(model) {
                                     TextField("Model", text: $model)
                                         .focused($fieldFocused)
                                         .autocapitalization(.none).autocorrectionDisabled()
