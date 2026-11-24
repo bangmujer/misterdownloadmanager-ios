@@ -4,7 +4,20 @@ import UniformTypeIdentifiers
 /// Bottom tab bar (like the reference browser app): Downloads,
 /// Browser, AI chat, My Files, Settings.
 enum AppTab: Hashable {
-    case downloads, browser, ai, files, settings
+    case downloads, browser, ai, files
+}
+
+/// iOS 26 liquid glass background, with the old frosted material as the
+/// fallback on earlier systems.
+private struct LiquidGlassBackground<S: Shape>: ViewModifier {
+    var shape: S
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+        }
+    }
 }
 
 struct ContentView: View {
@@ -14,6 +27,7 @@ struct ContentView: View {
     @State private var showingAdd = false
     @State private var showingGrabber = false
     @State private var showingTorrent = false
+    @State private var showingSettings = false
     @State private var addURLPreset = ""
     @State private var confirmDelete: DownloadItem?
 
@@ -56,17 +70,32 @@ struct ContentView: View {
             DownloadedFilesView()
                 .tabItem { Label("My Files", systemImage: "folder") }
                 .tag(AppTab.files)
-
-            SettingsView(showsDoneButton: false)
-                .tabItem { Label("Pengaturan", systemImage: "gearshape").labelStyle(.iconOnly) }
-                .tag(AppTab.settings)
         }
         .overlay(alignment: .top) { clipboardBanner }
+        .sheet(isPresented: $showingSettings) { SettingsView(showsDoneButton: true) }
+        // Detached gear, Telegram-style: Settings stays out of the tab
+        // pill, floating on its own just above the system bar's right
+        // end, and opens as a sheet (Done button included).
+        .overlay(alignment: .bottomTrailing) { settingsGearButton }
         .alert("Userscript diimpor", isPresented: Binding(get: { store.lastImportMessage != nil }, set: { if !$0 { store.lastImportMessage = nil } })) {
             Button("OK", role: .cancel) { store.lastImportMessage = nil }
         } message: {
             Text(store.lastImportMessage ?? "")
         }
+    }
+
+    private var settingsGearButton: some View {
+        Button { showingSettings = true } label: {
+            Image(systemName: "gearshape")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .frame(width: 56, height: 56)
+        }
+        .buttonStyle(.plain)
+        .modifier(LiquidGlassBackground(shape: Circle()))
+        .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+        .padding(.trailing, 16)
+        .padding(.bottom, 104)
     }
 
     private var titleForCategory: String {
@@ -103,7 +132,7 @@ struct ContentView: View {
             }
         }
         ToolbarItem(placement: .topBarLeading) {
-            Button { selectedTab = .settings } label: { Image(systemName: "gearshape") }
+            Button { showingSettings = true } label: { Image(systemName: "gearshape") }
         }
     }
 
