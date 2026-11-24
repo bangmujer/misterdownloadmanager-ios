@@ -148,8 +148,22 @@ struct SettingsView: View {
     @State private var cacheBytes: Int64 = 0
     @State private var cacheMessage: String?
     var body: some View {
-        NavigationStack {
-            Form {
+        // In the tab bar the system (Lainnya overflow) navigation
+        // already provides the bar — a second NavigationStack here
+        // stacked a second bar under the back button and pushed the
+        // title far down. As a sheet there is no outer bar, so the
+        // stack (and the Done button) stays.
+        Group {
+            if showsDoneButton {
+                NavigationStack { settingsForm }
+            } else {
+                settingsForm
+            }
+        }
+    }
+
+    private var settingsForm: some View {
+        Form {
                 Section("Download") {
                     HStack {
                         Text("Max connections per download")
@@ -281,7 +295,6 @@ struct SettingsView: View {
             .onAppear { cacheBytes = store.downloadCacheSize() }
             .onReceive(store.$settings.dropFirst()) { _ in store.save() }
             .onReceive(store.$browserSettings.dropFirst()) { _ in store.saveBrowserSettings() }
-        }
     }
 }
 

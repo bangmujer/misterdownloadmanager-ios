@@ -294,8 +294,12 @@ struct ApiTesterView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
+        // No own NavigationStack: in the tab bar the system
+        // (Lainnya overflow) navigation already provides the bar —
+        // a second stack put the title on a second bar far below
+        // the back button. The title and Baru button now sit on
+        // the same bar as the back button.
+        List {
                 requestSection
                 querySection
                 headersSection
@@ -315,7 +319,6 @@ struct ApiTesterView: View {
                 }
             }
             .onAppear { store.apiTester = apiStore }
-        }
     }
 
     // MARK: Sections
