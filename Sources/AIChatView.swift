@@ -615,14 +615,7 @@ struct AIChatView: View {
                             }
                         }
                         if !message.toolLog.isEmpty {
-                            DisclosureGroup("Perkakas (\(message.toolLog.count))") {
-                                ForEach(message.toolLog.indices, id: \.self) { index in
-                                    Text(message.toolLog[index])
-                                        .font(.caption).foregroundStyle(.secondary)
-                                        .textSelection(.enabled)
-                                }
-                            }
-                            .font(.caption)
+                            ToolLogCard(log: message.toolLog)
                         }
                         // Assistant answers render Markdown ChatGPT-style:
                         // headings, bold, code blocks with a copy button,
@@ -1248,5 +1241,130 @@ struct ImageGenerationView: View {
                 errorText = error ?? "Gagal membuat gambar."
             }
         }
+    }
+}
+
+// MARK: - Agent tool log card
+
+/// The collapsible "Perkakas" log above an assistant answer, as a
+/// card of per-call rows instead of a gray wall of text: one row per
+/// call with a tinted icon per tool family, the tool name in mono,
+/// the result in up to 3 lines, error rows in red, and consecutive
+/// identical calls folded into one row with a ×N badge.
+struct ToolLogCard: View {
+    let log: [String]
+
+    private struct Row: Identifiable {
+        let id = UUID()
+        let name: String
+        let result: String
+        let count: Int
+        let isError: Bool
+    }
+
+    private var rows: [Row] {
+        var out: [Row] = []
+        for line in log {
+            let (name, result) = Self.split(line)
+            let isError = Self.looksLikeError(result)
+            if let last = out.last, last.name == name, last.result == result, last.isError == isError {
+                out[out.count - 1] = Row(name: name, result: result, count: last.count + 1, isError: isError)
+            } else {
+                out.append(Row(name: name, result: result, count: 1, isError: isError))
+            }
+        }
+        return out
+    }
+
+    /// toolActivityLine emits "name: first line of the result".
+    private static func split(_ line: String) -> (name: String, result: String) {
+        guard let range = line.range(of: ": ") else { return ("perkakas", line) }
+        return (String(line[..<range.lowerBound]), String(line[range.upperBound...]))
+    }
+
+    private static func looksLikeError(_ result: String) -> Bool {
+        let lower = result.lowercased()
+        return lower.contains("error") || lower.contains("http 4") || lower.contains("http 5")
+            || lower.contains("gagal") || lower.contains("tidak ditemukan")
+            || lower.contains("tidak valid") || lower.contains("tidak bisa")
+    }
+
+    /// Icon + tint per tool family, so a scan of the log reads as
+    /// file / download / browser / devtools / network at a glance.
+    private static func style(for name: String) -> (icon: String, tint: Color) {
+        switch name {
+        case "list_files", "read_file", "write_file":
+            return ("folder", .blue)
+        case "list_downloads", "manage_download", "add_download", "search_downloads":
+            return ("arrow.down.circle", .green)
+        case "list_tabs", "open_url", "close_tab", "switch_tab":
+            return ("globe", .teal)
+        case "run_javascript", "get_page_html":
+            return ("chevron.left.forwardslash.chevron.right", .purple)
+        case "get_console_logs":
+            return ("apple.terminal", .purple)
+        case "fetch_url", "get_network_requests":
+            return ("arrow.left.arrow.right", .orange)
+        case "get_cookies":
+            return ("key", .pink)
+        case "list_bookmarks":
+            return ("bookmark", .yellow)
+        case "list_history":
+            return ("clock", .indigo)
+        default:
+            return ("info.circle", .gray)
+        }
+    }
+
+    var body: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 10) {
+                ForEach(rows) { row in
+                    let style = Self.style(for: row.name)
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: style.icon)
+                            .font(.caption)
+                            .foregroundStyle(row.isError ? .red : style.tint)
+                            .frame(width: 26, height: 26)
+                            .background((row.isError ? Color.red : style.tint).opacity(0.12), in: Circle())
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(row.name)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .bold()
+                                    .foregroundStyle(row.isError ? .red : .primary)
+                                if row.count > 1 {
+                                    Text("×\(row.count)")
+                                        .font(.caption2).bold()
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(Color(.quaternarySystemFill), in: Capsule())
+                                }
+                            }
+                            Text(row.result)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(3)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+            .padding(.top, 8)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "wrench.and.screwdriver")
+                    .foregroundStyle(.accent)
+                Text("Perkakas")
+                    .font(.subheadline).bold()
+                Text("\(log.count)")
+                    .font(.caption2).bold()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Color.accentColor, in: Capsule())
+                Spacer()
+            }
+        }
+        .padding(10)
+        .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
     }
 }
