@@ -80,9 +80,11 @@ struct AIChatView: View {
                     // Keyboard dismissal: drag the messages down to
                     // dismiss interactively (like any chat app), or tap
                     // a message — otherwise the keyboard covers the tab
-                    // bar and the user cannot switch tabs.
+                    // bar and the user cannot switch tabs. The tap is a
+                    // simultaneous gesture so it never swallows the
+                    // text's own double-tap-to-select-word gesture.
                     .scrollDismissesKeyboard(.interactively)
-                    .onTapGesture { inputFocused = false }
+                    .simultaneousGesture(TapGesture().onEnded { inputFocused = false })
                     .onChange(of: messages) { _ in
                         if let last = messages.last {
                             withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
@@ -226,13 +228,6 @@ struct AIChatView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showingSettings = true } label: {
                         Label("Pengaturan AI", systemImage: "gearshape")
-                    }
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button { inputFocused = false } label: {
-                        Image(systemName: "keyboard.chevron.compact.down")
-                            .accessibilityLabel("Sembunyikan keyboard")
                     }
                 }
             }
@@ -650,8 +645,8 @@ struct AIChatView: View {
                         }
                         // Assistant answers render Markdown ChatGPT-style:
                         // headings, bold, code blocks with a copy button,
-                        // tables, lists. Long-press selects the text, so
-                        // an answer can be blocked and copied.
+                        // tables, lists. Double-tap selects a word for
+                        // copying; the text stays selectable throughout.
                         MarkdownChatView(text: message.text)
                             .textSelection(.enabled)
                     }

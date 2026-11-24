@@ -1072,6 +1072,7 @@ struct AskAIView: View {
     @State private var viewerImage: ViewableImage?
     @StateObject private var transcriber = SpeechTranscriber()
     @State private var dictationBase = ""
+    @State private var composerActionsExpanded = false
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
@@ -1295,12 +1296,6 @@ struct AskAIView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Selesai") { dismiss() } }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button { fieldFocused = false } label: {
-                        Image(systemName: "chevron.down")
-                    }
-                }
             }
         }
         .onAppear {
@@ -1411,6 +1406,7 @@ struct AskAIView: View {
 
     private func send() {
         transcriber.stop()
+        composerActionsExpanded = false
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
         let att = attachment
         guard !isLoading else { return }
@@ -1686,57 +1682,85 @@ struct AskAIView: View {
                 .padding(10)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                Button { pickPhoto() } label: { Image(systemName: "photo") }
-                    .font(.system(size: 20))
-                    .frame(width: 38, height: 38)
+            // iOS 26 Messages-style composer, same as the AI tab: one
+            // glass capsule with a "+" menu, the field, and a trailing
+            // button that swaps between mic and send.
+            VStack(alignment: .leading, spacing: 8) {
+                if composerActionsExpanded {
+                    HStack(spacing: 20) {
+                        sheetComposerActionButton(icon: "photo", label: "Foto") {
+                            composerActionsExpanded = false
+                            pickPhoto()
+                        }
+                        sheetComposerActionButton(icon: "folder", label: "File") {
+                            composerActionsExpanded = false
+                            pickFile()
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                HStack(spacing: 4) {
+                    Button {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                            composerActionsExpanded.toggle()
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(width: 32, height: 32)
+                            .background(Color(.tertiarySystemFill), in: Circle())
+                            .rotationEffect(.degrees(composerActionsExpanded ? 45 : 0))
+                    }
                     .disabled(isLoading || provider == .meta)
-                Button { pickFile() } label: { Image(systemName: "folder") }
-                    .font(.system(size: 20))
-                    .frame(width: 38, height: 38)
-                    .disabled(isLoading || provider == .meta)
-                Button {
-                    if transcriber.isRecording {
-                        transcriber.stop()
+                    ZStack(alignment: .topLeading) {
+                        TextEditor(text: $question)
+                            .focused($fieldFocused)
+                            .frame(minHeight: 44, maxHeight: 110)
+                            .padding(8)
+                            .scrollContentBackground(.hidden)
+                        if question.isEmpty {
+                            Text("Tulis pertanyaan…")
+                                .font(.subheadline).foregroundStyle(.tertiary)
+                                .padding(.horizontal, 16).padding(.vertical, 16)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    if isLoading {
+                        Button { stopStreaming() } label: {
+                            Image(systemName: "stop.circle.fill")
+                                .font(.system(size: 30))
+                                .foregroundStyle(.red)
+                        }
+                        .frame(width: 34, height: 34)
+                    } else if canAsk {
+                        Button { send() } label: {
+                            Image(systemName: "arrow.up.circle.fill")
+                                .font(.system(size: 30))
+                        }
                     } else {
-                        dictationBase = question
-                        transcriber.toggle()
-                    }
-                } label: {
-                    Image(systemName: transcriber.isRecording ? "mic.fill" : "mic")
-                        .foregroundStyle(transcriber.isRecording ? .red : .primary)
-                }
-                .font(.system(size: 20))
-                .frame(width: 38, height: 38)
-                .disabled(isLoading || provider == .meta)
-                ZStack(alignment: .topLeading) {
-                    TextEditor(text: $question)
-                        .focused($fieldFocused)
-                        .frame(minHeight: 44, maxHeight: 110)
-                        .padding(8)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
-                        .scrollContentBackground(.hidden)
-                    if question.isEmpty {
-                        Text("Tulis pertanyaan…")
-                            .font(.subheadline).foregroundStyle(.tertiary)
-                            .padding(.horizontal, 16).padding(.vertical, 16)
-                            .allowsHitTesting(false)
+                        Button {
+                            if transcriber.isRecording {
+                                transcriber.stop()
+                            } else {
+                                dictationBase = question
+                                transcriber.toggle()
+                            }
+                        } label: {
+                            Image(systemName: transcriber.isRecording ? "mic.fill" : "mic")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(transcriber.isRecording ? .red : .primary)
+                                .frame(width: 32, height: 32)
+                                .background(Color(.tertiarySystemFill), in: Circle())
+                        }
+                        .disabled(provider == .meta)
                     }
                 }
-                if isLoading {
-                    Button { stopStreaming() } label: {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.system(size: 32))
-                            .foregroundStyle(.red)
-                    }
-                    .frame(width: 38, height: 38)
-                } else {
-                    Button { send() } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.system(size: 32))
-                    }
-                    .disabled(!canAsk)
-                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(.primary.opacity(0.08), lineWidth: 0.5))
             }
             if turns.isEmpty {
                 Text("Satu lampiran per pertanyaan; pilih lagi untuk mengganti. Foto dikirim sebagai gambar, file teks dibaca isinya, PDF dikirim sebagai dokumen — semua tergantung model dan endpoint-nya mendukung atau tidak. Jenis file lain hanya terbaca nama dan ukurannya.")
@@ -1744,6 +1768,24 @@ struct AskAIView: View {
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
+    }
+
+    /// One action in the sheet composer's expandable "+" strip: a
+    /// glass circle with a caption, like the iOS 26 Messages app strip.
+    private func sheetComposerActionButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .background(.ultraThinMaterial, in: Circle())
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .disabled(isLoading || provider == .meta)
     }
 
     private var metaCard: some View {
