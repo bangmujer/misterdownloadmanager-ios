@@ -240,32 +240,38 @@ final class AIAttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIDocu
 // MARK: - Streaming AI client (SSE for all three APIs)
 
 enum AIClient {
+    @discardableResult
     static func ask(provider: AIProvider, model: String, apiKey: String, endpoint: String = "",
                     attachment: AIAttachment? = nil,
                     question: String, pageTitle: String, pageURL: String, pageText: String,
                     onToken: @escaping (String) -> Void,
-                    onDone: @escaping (String?) -> Void) {
+                    onDone: @escaping (String?) -> Void) -> Task<Void, Never> {
         let prompt = buildPrompt(question: question, pageTitle: pageTitle, pageURL: pageURL, pageText: pageText, attachment: attachment)
         guard let request = makeRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: attachment, prompt: prompt) else {
             onDone("Tidak bisa membuat permintaan untuk \(provider.displayName).")
-            return
+            return Task {}
         }
-        stream(request: request, provider: provider, onToken: onToken, onDone: onDone)
+        return stream(request: request, provider: provider, onToken: onToken, onDone: onDone)
     }
 
     /// Multi-turn chat for the dedicated AI tab: the whole recent
     /// history (roles "user"/"assistant", oldest first) is sent, so the
     /// model keeps context across turns. Same streaming path as `ask`.
+    /// The Ask AI sheet reuses this for follow-up questions, passing
+    /// the page context as the system prompt. Returns the streaming
+    /// task so the caller can stop it (the sheet's Stop button).
+    @discardableResult
     static func askChat(provider: AIProvider, model: String, apiKey: String, endpoint: String = "",
                         attachment: AIAttachment? = nil,
                         messages: [(role: String, text: String)],
+                        systemPrompt: String? = nil,
                         onToken: @escaping (String) -> Void,
-                        onDone: @escaping (String?) -> Void) {
-        guard let request = makeChatRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: attachment, messages: messages) else {
+                        onDone: @escaping (String?) -> Void) -> Task<Void, Never> {
+        guard let request = makeChatRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: attachment, messages: messages, systemPrompt: systemPrompt) else {
             onDone("Tidak bisa membuat permintaan untuk \(provider.displayName).")
-            return
+            return Task {}
         }
-        stream(request: request, provider: provider, onToken: onToken, onDone: onDone)
+        return stream(request: request, provider: provider, onToken: onToken, onDone: onDone)
     }
 
     /// Text for the newest chat message when it carries an attachment.
@@ -281,8 +287,8 @@ enum AIClient {
         return text + "\n[Lampiran: file \(attachment.fileName) (\(attachment.mimeType), \(attachment.displaySize))]"
     }
 
-    private static func makeChatRequest(provider: AIProvider, model: String, apiKey: String, endpoint: String, attachment: AIAttachment?, messages: [(role: String, text: String)]) -> URLRequest? {
-        let system = "Kamu adalah asisten AI serba bisa. Jawablah pertanyaan apa pun tentang topik apa pun, tanpa batasan topik — tidak terbatas pada aplikasi ini. Jawablah dalam bahasa yang sama dengan pesan pengguna, ringkas tapi lengkap."
+    private static func makeChatRequest(provider: AIProvider, model: String, apiKey: String, endpoint: String, attachment: AIAttachment?, messages: [(role: String, text: String)], systemPrompt: String? = nil) -> URLRequest? {
+        let system = systemPrompt ?? "Kamu adalah asisten AI serba bisa. Jawablah pertanyaan apa pun tentang topik apa pun, tanpa batasan topik — tidak terbatas pada aplikasi ini. Jawablah dalam bahasa yang sama dengan pesan pengguna, ringkas tapi lengkap."
         let recent = Array(messages.suffix(20))
         let media = attachment.flatMap { $0.isImage || $0.isPDF ? $0 : nil }
         let lastText = textWithAttachmentNote(recent.last?.text ?? "", attachment: attachment, mediaAttached: media != nil)
@@ -493,9 +499,10 @@ enum AIClient {
         }
     }
 
+    @discardableResult
     private static func stream(request: URLRequest, provider: AIProvider,
                                onToken: @escaping (String) -> Void,
-                               onDone: @escaping (String?) -> Void) {
+                               onDone: @escaping (String?) -> Void) -> Task<Void, Never> {
         Task {
             do {
                 let (bytes, response) = try await URLSession.shared.bytes(for: request)
@@ -528,8 +535,15 @@ enum AIClient {
                 }
                 await MainActor.run { onDone(nil) }
             } catch {
-                let message = error.localizedDescription
-                await MainActor.run { onDone(message) }
+                // A cancelled stream (the sheet's Stop button) ends
+                // quietly with whatever arrived so far — it is not an
+                // error, and the caller must not show a failure for it.
+                if Task.isCancelled {
+                    await MainActor.run { onDone(nil) }
+                } else {
+                    let message = error.localizedDescription
+                    await MainActor.run { onDone(message) }
+                }
             }
         }
     }
@@ -563,6 +577,24 @@ enum AIClient {
 
 // MARK: - Ask AI sheet
 
+/// One question + streamed answer in the Ask AI sheet. Follow-up
+/// questions append turns, so the sheet is a short conversation
+/// instead of a single shot.
+private struct AskTurn: Identifiable, Equatable {
+    let id = UUID()
+    var question: String
+    var answer: String
+    var attachment: AIAttachment?
+    var error: String?
+
+    init(question: String, answer: String = "", attachment: AIAttachment? = nil, error: String? = nil) {
+        self.question = question
+        self.answer = answer
+        self.attachment = attachment
+        self.error = error
+    }
+}
+
 struct AskAIView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
@@ -579,14 +611,21 @@ struct AskAIView: View {
     @State private var attachment: AIAttachment?
     @State private var attachmentPicker = AIAttachmentPicker()
     @State private var question = ""
-    @State private var answer = ""
+    @State private var turns: [AskTurn] = []
     @State private var isLoading = false
     @State private var errorText: String?
     @State private var copiedNotice = false
+    @State private var includePageContext = true
+    @State private var showConfig = false
+    @State private var stopped = false
+    @State private var requestTask: Task<Void, Never>?
+    @State private var copiedTurnID: UUID?
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
         NavigationStack {
+            VStack(spacing: 0) {
+            ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     if !pageTitle.isEmpty || !pageURL.isEmpty {
@@ -599,8 +638,13 @@ struct AskAIView: View {
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("AI").font(.headline)
+                    Toggle("Sertakan konteks halaman ini", isOn: $includePageContext)
+                        .font(.subheadline)
+                        .disabled(isLoading)
+
+                    DisclosureGroup(isExpanded: $showConfig) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("AI").font(.headline)
                         Picker("AI", selection: $provider) {
                             ForEach(AIProvider.allCases) { p in
                                 Text(p.displayName).tag(p)
@@ -662,54 +706,19 @@ struct AskAIView: View {
                             }
                         }
                     }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Pertanyaan").font(.headline)
-                        TextEditor(text: $question)
-                            .focused($fieldFocused)
-                            .frame(minHeight: 80)
-                            .padding(8)
-                            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                        if provider != .meta {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Lampiran").font(.headline)
-                                if let attachment {
-                                    HStack(spacing: 10) {
-                                        if attachment.isImage, let uiImage = UIImage(data: attachment.data) {
-                                            Image(uiImage: uiImage)
-                                                .resizable().scaledToFill()
-                                                .frame(width: 44, height: 44).clipped().cornerRadius(8)
-                                        } else {
-                                            Image(systemName: attachment.isPDF ? "doc.fill" : "doc")
-                                                .font(.title2).foregroundStyle(.secondary)
-                                                .frame(width: 44, height: 44)
-                                        }
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(attachment.fileName).font(.subheadline).lineLimit(2)
-                                            Text("\(attachment.displaySize) · \(attachment.isImage ? "foto" : attachment.isPDF ? "PDF" : attachment.mimeType)")
-                                                .font(.caption).foregroundStyle(.secondary)
-                                        }
-                                        Spacer()
-                                        Button { self.attachment = nil } label: {
-                                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    .padding(10)
-                                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                                }
-                                HStack(spacing: 8) {
-                                    Button { pickPhoto() } label: { Label("Foto", systemImage: "photo") }
-                                        .padding(.horizontal, 12).padding(.vertical, 8)
-                                        .background(Color(.secondarySystemBackground), in: Capsule())
-                                    Button { pickFile() } label: { Label("File", systemImage: "doc") }
-                                        .padding(.horizontal, 12).padding(.vertical, 8)
-                                        .background(Color(.secondarySystemBackground), in: Capsule())
-                                }
-                                .font(.subheadline)
-                                Text("Satu lampiran per pertanyaan; pilih lagi untuk mengganti. Foto dikirim sebagai gambar, file teks dibaca isinya, PDF dikirim sebagai dokumen — semua tergantung model dan endpoint-nya mendukung atau tidak. Jenis file lain hanya terbaca nama dan ukurannya.")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
+                    } label: {
+                        HStack {
+                            Text("Pengaturan AI").font(.subheadline)
+                            Spacer()
+                            Text(configSummary).font(.caption).foregroundStyle(.secondary)
                         }
+                    }
+
+                    ForEach(turns) { turn in
+                        turnView(turn)
+                    }
+
+                    if turns.isEmpty, !isLoading {
                         HStack(spacing: 8) {
                             quickAction("Ringkas halaman ini")
                             quickAction("Jelaskan sederhana")
@@ -717,39 +726,45 @@ struct AskAIView: View {
                         HStack(spacing: 8) {
                             quickAction("Apa isi halaman ini?")
                         }
-                        Button {
-                            send()
-                        } label: {
-                            HStack {
-                                if isLoading { ProgressView().tint(.white) }
-                                Text(isLoading ? "Menjawab…" : "Tanya \(provider.displayName)")
+                    }
+
+                    if let last = turns.last, !last.answer.isEmpty, !isLoading {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Pertanyaan lanjutan").font(.subheadline).foregroundStyle(.secondary)
+                            HStack(spacing: 8) {
+                                quickAction("Jelaskan lebih sederhana")
+                                quickAction("Beri contoh")
                             }
-                            .frame(maxWidth: .infinity).padding(.vertical, 11)
-                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 12))
-                            .foregroundStyle(.white)
+                            HStack(spacing: 8) {
+                                quickAction("Apa lagi yang penting dari halaman ini?")
+                            }
                         }
-                        .disabled(isLoading || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (provider.needsKey && apiKey.isEmpty) || missingEndpoint)
+                    }
+
+                    if !turns.isEmpty, !isLoading {
+                        Button { handOffToAITab() } label: {
+                            Label("Lanjut di tab AI", systemImage: "sparkles")
+                                .frame(maxWidth: .infinity).padding(.vertical, 10)
+                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                        .font(.subheadline)
                     }
 
                     if let errorText {
                         Text(errorText).font(.subheadline).foregroundStyle(.red)
                     }
-                    if !answer.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Jawaban").font(.headline)
-                            MarkdownChatView(text: answer)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .padding(14)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
-                    } else if isLoading {
-                        HStack { ProgressView(); Text("Meminta jawaban…").foregroundStyle(.secondary) }
-                            .font(.subheadline)
-                    }
+                    Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(16)
             }
             .scrollDismissesKeyboard(.interactively)
+            .onChange(of: turns) { _ in
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
+            }
+            Divider()
+            composer
+            }
             .navigationTitle("Minta AI")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -765,12 +780,19 @@ struct AskAIView: View {
         .onAppear {
             provider = AIProvider(rawValue: store.browserSettings.aiProvider) ?? .gemini
             loadModelAndKey()
+            showConfig = !keySaved
         }
-        .onDisappear { fieldFocused = false }
+        .onDisappear {
+            fieldFocused = false
+            requestTask?.cancel()
+            requestTask = nil
+        }
         .onChange(of: provider) { newValue in
+            requestTask?.cancel()
+            requestTask = nil
+            turns = []
             store.browserSettings.aiProvider = newValue.rawValue
             store.saveBrowserSettings()
-            answer = ""
             errorText = nil
             loadModelAndKey()
         }
@@ -835,7 +857,8 @@ struct AskAIView: View {
 
     private func send() {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty, !isLoading else { return }
+        let att = attachment
+        guard !isLoading else { return }
         guard provider != .meta else { return }
         guard !apiKey.isEmpty else {
             errorText = "Masukkan API key \(provider.displayName) dulu — kuncinya disimpan di Keychain perangkat ini."
@@ -849,22 +872,303 @@ struct AskAIView: View {
             errorText = "Isi URL endpoint dulu."
             return
         }
-        isLoading = true
-        answer = ""
+        guard !q.isEmpty || att != nil else { return }
+        // Sending with only an attachment asks about it, like the AI tab.
+        let questionText = q.isEmpty ? "Jelaskan lampiran ini." : q
+        question = ""
+        attachment = nil
         errorText = nil
-        AIClient.ask(
-            provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: attachment,
-            question: q, pageTitle: pageTitle, pageURL: pageURL, pageText: pageText,
-            onToken: { token in answer += token },
+        turns.append(AskTurn(question: questionText, attachment: att))
+        streamTurn(index: turns.count - 1)
+    }
+
+    /// Streams the answer for one turn, sending the earlier turns as
+    /// history so follow-ups keep context. The page context rides as
+    /// the system prompt when the toggle is on.
+    private func streamTurn(index: Int) {
+        guard turns.indices.contains(index) else { return }
+        let turn = turns[index]
+        isLoading = true
+        stopped = false
+        var history: [(role: String, text: String)] = []
+        for prior in turns[..<index] {
+            history.append((role: "user", text: historyText(for: prior)))
+            if !prior.answer.isEmpty {
+                history.append((role: "assistant", text: prior.answer))
+            }
+        }
+        history.append((role: "user", text: turn.question))
+        requestTask = AIClient.askChat(
+            provider: provider, model: model, apiKey: apiKey, endpoint: endpoint,
+            attachment: turn.attachment, messages: history,
+            systemPrompt: includePageContext ? pageSystemPrompt : nil,
+            onToken: { token in
+                guard !stopped, turns.indices.contains(index) else { return }
+                turns[index].answer += token
+            },
             onDone: { message in
                 isLoading = false
+                requestTask = nil
+                guard !stopped, turns.indices.contains(index) else { return }
                 if let message {
-                    errorText = message
-                } else if answer.isEmpty {
-                    errorText = "Tidak ada jawaban dari \(provider.displayName). Coba cek model dan kunci API-nya."
+                    turns[index].error = message
+                } else if turns[index].answer.isEmpty {
+                    turns[index].error = "Tidak ada jawaban dari \(provider.displayName). Coba cek model dan kunci API-nya."
                 }
             }
         )
+    }
+
+    /// Re-asks one turn, dropping the turns after it (they answered a
+    /// different question) — the same rule as retry in the AI tab.
+    private func regenerate(_ turn: AskTurn) {
+        guard !isLoading, let idx = turns.firstIndex(where: { $0.id == turn.id }) else { return }
+        turns = Array(turns[...idx])
+        turns[idx].answer = ""
+        turns[idx].error = nil
+        streamTurn(index: idx)
+    }
+
+    private func stopStreaming() {
+        stopped = true
+        requestTask?.cancel()
+        requestTask = nil
+        isLoading = false
+    }
+
+    /// A past turn's question as history text: readable file
+    /// attachments are inlined, images/PDFs keep a name note — the
+    /// same rule the AI tab uses for older messages.
+    private func historyText(for turn: AskTurn) -> String {
+        guard let att = turn.attachment else { return turn.question }
+        if let readable = att.readableText {
+            return turn.question + "\n\nLampiran file \(att.fileName):\n\(readable)"
+        }
+        return turn.question + " [Lampiran: \(att.fileName)]"
+    }
+
+    /// The page context as a system prompt: same wording as the old
+    /// single-shot prompt, minus the question and attachment parts,
+    /// which the chat request carries on the messages themselves.
+    private var pageSystemPrompt: String {
+        var parts: [String] = []
+        parts.append("Kamu adalah asisten AI di dalam browser. Jawablah dalam bahasa yang sama dengan pertanyaan pengguna.")
+        parts.append("Halaman yang sedang dibuka:\nJudul: \(pageTitle)\nURL: \(pageURL)")
+        let trimmed = pageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            parts.append("Isi halaman: (tidak ada teks yang bisa dibaca dari halaman ini)")
+        } else {
+            parts.append("Isi halaman (dipotong):\n\(pageText)")
+        }
+        return parts.joined(separator: "\n\n")
+    }
+
+    /// Hands the whole sheet conversation to the AI tab as a saved
+    /// session: the tab picks it up through the store mailbox and
+    /// switches over, so the chat survives in projects like any other.
+    private func handOffToAITab() {
+        guard !turns.isEmpty else { return }
+        var messages: [AIChatMessage] = []
+        for turn in turns {
+            messages.append(AIChatMessage(role: "user", text: turn.question, attachment: turn.attachment))
+            if !turn.answer.isEmpty {
+                messages.append(AIChatMessage(role: "assistant", text: turn.answer))
+            }
+        }
+        let first = turns.first?.question
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\n", with: " ") ?? ""
+        store.aiHandoff = AIChatHandoff(
+            title: first.isEmpty ? "Tanya AI" : String(first.prefix(40)),
+            messages: messages
+        )
+        dismiss()
+    }
+
+    private func copyAnswer(_ turn: AskTurn) {
+        UIPasteboard.general.string = turn.answer
+        copiedTurnID = turn.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            if copiedTurnID == turn.id { copiedTurnID = nil }
+        }
+    }
+
+    private func shareAnswer(_ turn: AskTurn) {
+        shareTextFromTop(turn.answer)
+    }
+
+    private func shareTextFromTop(_ text: String) {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let window = scenes.flatMap({ $0.windows }).first(where: { $0.isKeyWindow }) else { return }
+        var top = window.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        let activity = UIActivityViewController(activityItems: [text], applicationActivities: nil)
+        if let popover = activity.popoverPresentationController {
+            popover.sourceView = window
+            popover.sourceRect = CGRect(x: window.bounds.midX, y: window.bounds.midY, width: 1, height: 1)
+        }
+        top?.present(activity, animated: true)
+    }
+
+    private var configSummary: String {
+        if provider == .meta { return "Muse · lewat web" }
+        let m = model.isEmpty ? provider.defaultModel : model
+        return "\(provider.displayName) · \(m) · \(keySaved ? "kunci tersimpan" : "kunci belum diisi")"
+    }
+
+    private var canAsk: Bool {
+        let textPresent = !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return !isLoading && provider != .meta && (textPresent || attachment != nil)
+            && !(provider.needsKey && apiKey.isEmpty) && !missingEndpoint
+    }
+
+    private func turnView(_ turn: AskTurn) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Spacer(minLength: 48)
+                VStack(alignment: .trailing, spacing: 6) {
+                    if let att = turn.attachment {
+                        attachmentChip(att)
+                    }
+                    Text(turn.question)
+                        .padding(.horizontal, 12).padding(.vertical, 9)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            if !turn.answer.isEmpty || (isLoading && turn.id == turns.last?.id) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Jawaban").font(.headline)
+                        Spacer()
+                        Button { copyAnswer(turn) } label: {
+                            Label(copiedTurnID == turn.id ? "Disalin" : "Salin", systemImage: "doc.on.doc")
+                        }
+                        .font(.subheadline)
+                        Button { shareAnswer(turn) } label: {
+                            Label("Bagikan", systemImage: "square.and.arrow.up")
+                        }
+                        .font(.subheadline)
+                    }
+                    if turn.answer.isEmpty {
+                        HStack { ProgressView(); Text("Meminta jawaban…").foregroundStyle(.secondary) }
+                            .font(.subheadline)
+                    } else {
+                        MarkdownChatView(text: turn.answer)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(14)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+            }
+            if let error = turn.error {
+                HStack(spacing: 6) {
+                    Text(error).font(.subheadline).foregroundStyle(.red)
+                    Spacer()
+                    Button("Coba lagi") { regenerate(turn) }
+                        .font(.subheadline)
+                        .disabled(isLoading)
+                }
+            } else if turn.id == turns.last?.id, !turn.answer.isEmpty, !isLoading {
+                HStack {
+                    Spacer()
+                    Button { regenerate(turn) } label: {
+                        Label("Minta jawaban ulang", systemImage: "arrow.clockwise")
+                    }
+                    .font(.subheadline)
+                }
+            }
+        }
+    }
+
+    private func attachmentChip(_ att: AIAttachment) -> some View {
+        HStack(spacing: 6) {
+            if att.isImage, let uiImage = UIImage(data: att.data) {
+                Image(uiImage: uiImage).resizable().scaledToFill()
+                    .frame(width: 32, height: 32).clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                Image(systemName: "doc.fill").foregroundStyle(.secondary)
+            }
+            Text(att.fileName).lineLimit(1)
+            Text(att.displaySize).foregroundStyle(.secondary)
+        }
+        .font(.caption)
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(Color(.tertiarySystemBackground), in: Capsule())
+    }
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let att = attachment {
+                HStack(spacing: 10) {
+                    if att.isImage, let uiImage = UIImage(data: att.data) {
+                        Image(uiImage: uiImage)
+                            .resizable().scaledToFill()
+                            .frame(width: 44, height: 44).clipped().cornerRadius(8)
+                    } else {
+                        Image(systemName: att.isPDF ? "doc.fill" : "doc")
+                            .font(.title2).foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44)
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(att.fileName).font(.subheadline).lineLimit(2)
+                        Text("\(att.displaySize) · \(att.isImage ? "foto" : att.isPDF ? "PDF" : att.mimeType)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button { attachment = nil } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                }
+                .padding(10)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                Button { pickPhoto() } label: { Image(systemName: "photo") }
+                    .font(.system(size: 20))
+                    .frame(width: 38, height: 38)
+                    .disabled(isLoading || provider == .meta)
+                Button { pickFile() } label: { Image(systemName: "folder") }
+                    .font(.system(size: 20))
+                    .frame(width: 38, height: 38)
+                    .disabled(isLoading || provider == .meta)
+                ZStack(alignment: .topLeading) {
+                    TextEditor(text: $question)
+                        .focused($fieldFocused)
+                        .frame(minHeight: 44, maxHeight: 110)
+                        .padding(8)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
+                        .scrollContentBackground(.hidden)
+                    if question.isEmpty {
+                        Text("Tulis pertanyaan…")
+                            .font(.subheadline).foregroundStyle(.tertiary)
+                            .padding(.horizontal, 16).padding(.vertical, 16)
+                            .allowsHitTesting(false)
+                    }
+                }
+                if isLoading {
+                    Button { stopStreaming() } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 32))
+                            .foregroundStyle(.red)
+                    }
+                    .frame(width: 38, height: 38)
+                } else {
+                    Button { send() } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 32))
+                    }
+                    .disabled(!canAsk)
+                }
+            }
+            if turns.isEmpty {
+                Text("Satu lampiran per pertanyaan; pilih lagi untuk mengganti. Foto dikirim sebagai gambar, file teks dibaca isinya, PDF dikirim sebagai dokumen — semua tergantung model dan endpoint-nya mendukung atau tidak. Jenis file lain hanya terbaca nama dan ukurannya.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
     }
 
     private var metaCard: some View {

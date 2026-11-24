@@ -57,6 +57,21 @@ struct AIChatProject: Identifiable, Equatable, Codable {
     }
 }
 
+/// A conversation handed from the Ask AI sheet to the AI tab, carried
+/// through the DownloadStore mailbox: the sheet sets it and dismisses,
+/// the tab imports it as a saved session and the app switches tabs.
+struct AIChatHandoff: Equatable {
+    let id: UUID
+    let title: String
+    let messages: [AIChatMessage]
+
+    init(title: String, messages: [AIChatMessage]) {
+        self.id = UUID()
+        self.title = title
+        self.messages = messages
+    }
+}
+
 final class AIChatStore: ObservableObject {
     @Published var sessions: [AIChatSession] = []
     @Published var projects: [AIChatProject] = []
@@ -80,6 +95,17 @@ final class AIChatStore: ObservableObject {
     @discardableResult
     func createSession() -> AIChatSession {
         let session = AIChatSession()
+        sessions.insert(session, at: 0)
+        currentSessionID = session.id
+        save()
+        return session
+    }
+
+    /// A conversation handed over from the Ask AI sheet: it becomes a
+    /// saved session of its own, so it survives restarts like the rest.
+    @discardableResult
+    func importHandoff(title: String, messages: [AIChatMessage]) -> AIChatSession {
+        let session = AIChatSession(title: title, messages: messages)
         sessions.insert(session, at: 0)
         currentSessionID = session.id
         save()

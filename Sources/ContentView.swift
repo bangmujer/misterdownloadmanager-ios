@@ -61,6 +61,9 @@ struct ContentView: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppTab.settings)
         }
+        .onChange(of: store.aiHandoff) { handoff in
+            if handoff != nil { selectedTab = .ai }
+        }
         .overlay(alignment: .top) { clipboardBanner }
         .alert("Userscript diimpor", isPresented: Binding(get: { store.lastImportMessage != nil }, set: { if !$0 { store.lastImportMessage = nil } })) {
             Button("OK", role: .cancel) { store.lastImportMessage = nil }

@@ -24,6 +24,7 @@ final class DownloadStore: ObservableObject {
     /// Set when a script file is opened from another app (Files share
     /// sheet / Open in), so the UI can confirm the import.
     @Published var lastImportMessage: String?
+    @Published var aiHandoff: AIChatHandoff?
     @Published var browserHistory: [BrowserHistoryEntry] = []
     /// Saved website logins (passwords live in the Keychain, metadata in
     /// a JSON file). Changes forward to this store's objectWillChange so

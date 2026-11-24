@@ -43,6 +43,7 @@ struct AIChatView: View {
     @State private var failedIDs: Set<UUID> = []
     @State private var editingMessageID: UUID?
     @State private var stashedDraft = ""
+    @State private var pendingHandoff: AIChatHandoff?
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -188,6 +189,22 @@ struct AIChatView: View {
         .onChange(of: messages) { _ in
             if !isLoading { persist() }
         }
+        .onChange(of: store.aiHandoff) { handoff in
+            guard let handoff else { return }
+            // Never swap the chat under a running stream: the tokens
+            // would land in the imported chat as a stray answer.
+            if isLoading {
+                pendingHandoff = handoff
+            } else {
+                importHandoff(handoff)
+            }
+        }
+        .onChange(of: isLoading) { loading in
+            if !loading, let handoff = pendingHandoff {
+                pendingHandoff = nil
+                importHandoff(handoff)
+            }
+        }
         .alert("Proyek baru", isPresented: $showingNewProject) {
             TextField("Nama proyek", text: $newProjectName)
             Button("Batal", role: .cancel) { newProjectName = "" }
@@ -260,7 +277,7 @@ struct AIChatView: View {
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Color(.secondarySystemBackground), in: Capsule())
             }
-            Text("Riwayat chat hanya tersimpan selama aplikasi dibuka — tutup aplikasi berarti mulai chat baru.")
+            Text("Chat tersimpan di perangkat ini — buka sidebar untuk melihat proyek dan chat lama.")
                 .font(.caption).foregroundStyle(.secondary)
             // Build stamp, so a screenshot always proves which build is installed.
             Text("Build \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
@@ -422,6 +439,20 @@ struct AIChatView: View {
         chatStore.save()
     }
 
+    /// Takes a conversation handed over from the Ask AI sheet and
+    /// opens it as the current saved session.
+    private func importHandoff(_ handoff: AIChatHandoff) {
+        persist()
+        let session = chatStore.importHandoff(title: handoff.title, messages: handoff.messages)
+        messages = session.messages
+        failedIDs = []
+        editingMessageID = nil
+        errorText = nil
+        draft = ""
+        attachment = nil
+        store.aiHandoff = nil
+    }
+
     private func openSession(_ session: AIChatSession) {
         persist()
         chatStore.currentSessionID = session.id
@@ -483,8 +514,10 @@ struct AIChatView: View {
                 if message.role == "assistant" {
                     // Assistant answers render Markdown ChatGPT-style:
                     // headings, bold, code blocks with a copy button,
-                    // tables, lists. User messages stay literal text.
+                    // tables, lists. Long-press selects the text, so
+                    // an answer can be blocked and copied.
                     MarkdownChatView(text: message.text)
+                        .textSelection(.enabled)
                         .padding(.horizontal, 12).padding(.vertical, 9)
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
                         .foregroundStyle(.primary)
