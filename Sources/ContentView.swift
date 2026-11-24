@@ -56,6 +56,12 @@ struct ContentView: View {
         .toolbar(.hidden, for: .tabBar)
         .safeAreaInset(edge: .bottom) { customTabBar }
         .overlay(alignment: .top) { clipboardBanner }
+        .alert("Userscript diimpor", isPresented: Binding(get: { store.lastImportMessage != nil }, set: { if !$0 { store.lastImportMessage = nil } })) {
+            Button("OK", role: .cancel) { store.lastImportMessage = nil }
+        } message: {
+            Text(store.lastImportMessage ?? "")
+        }
+    }
 
     // MARK: - Telegram-style bottom bar
 
@@ -104,12 +110,6 @@ struct ContentView: View {
             )
         }
         .buttonStyle(.plain)
-    }
-        .alert("Userscript diimpor", isPresented: Binding(get: { store.lastImportMessage != nil }, set: { if !$0 { store.lastImportMessage = nil } })) {
-            Button("OK", role: .cancel) { store.lastImportMessage = nil }
-        } message: {
-            Text(store.lastImportMessage ?? "")
-        }
     }
 
     private var titleForCategory: String {
