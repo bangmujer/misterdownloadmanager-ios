@@ -311,6 +311,7 @@ struct ApiTesterView: View {
             }
             .navigationTitle("API Tester")
             .toolbar {
+                ToolbarItem(placement: .principal) { Text("API Tester") }
                 Button("Baru") {
                     sendTask?.cancel()
                     sending = false

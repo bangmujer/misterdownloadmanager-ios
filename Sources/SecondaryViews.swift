@@ -288,6 +288,7 @@ struct SettingsView: View {
             .navigationTitle("Options")
             .onChange(of: store.settings.language) { _ in store.save() }
             .toolbar {
+                ToolbarItem(placement: .principal) { Text("Options") }
                 if showsDoneButton {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { store.save(); dismiss() } }
                 }

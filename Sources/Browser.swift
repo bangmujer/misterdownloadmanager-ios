@@ -1873,27 +1873,30 @@ final class BrowserSession: ObservableObject {
           }
         }
         var scope = null;
-        try { scope = v.closest('.html5-video-player'); } catch (e2) {}
-        if (!scope) {
-          scope = v;
-          for (var d = 0; d < 3 && scope.parentElement; d++) scope = scope.parentElement;
+        var px = r.right - 24, py = r.top + 24;
+        if (px < 0 || py < 0 || px > window.innerWidth || py > window.innerHeight) return null;
+        var wasHidden = false;
+        if (btn) { wasHidden = (btn.style.display === 'none'); btn.style.display = 'none'; }
+        var hit = null;
+        try { hit = document.elementFromPoint(px, py); } catch (e2) {}
+        while (hit && hit.shadowRoot) {
+          var inner = null;
+          try { inner = hit.shadowRoot.elementFromPoint(px, py); } catch (e3) {}
+          if (!inner || inner === hit) break;
+          hit = inner;
         }
-        var bestRect = null;
-        var list = scope.querySelectorAll('button, [role="button"]');
-        for (var i = 0; i < list.length; i++) {
-          var el = list[i];
-          if (el === btn) continue;
-          var q = el.getBoundingClientRect();
-          if (q.width < 20 || q.height < 20) continue;
-          if (q.top < r.top - 4 || q.top > r.top + r.height * 0.35) continue;
-          if (q.right < r.right - 150 || q.left > r.right + 4) continue;
-          if (q.bottom < r.top || q.top > r.bottom) continue;
-          var cs2 = null;
-          try { cs2 = window.getComputedStyle(el); } catch (e3) {}
-          if (cs2 && (cs2.display === 'none' || cs2.visibility === 'hidden')) continue;
-          if (!bestRect || q.right > bestRect.right) bestRect = q;
+        if (btn && !wasHidden) btn.style.display = '';
+        for (var d = 0; d < 6 && hit; d++) {
+          if (hit === btn) return null;
+          var tag = hit.tagName;
+          if (tag === 'BUTTON' || (hit.getAttribute && hit.getAttribute('role') === 'button')) {
+            var q = hit.getBoundingClientRect();
+            if (q.width > 0 && q.height > 0) return q;
+            return null;
+          }
+          hit = hit.parentElement;
         }
-        return bestRect;
+        return null;
       }
       function refresh() {
         var v = bestVideo();

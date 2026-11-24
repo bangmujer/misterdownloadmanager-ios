@@ -75,6 +75,7 @@ struct PasswordsView: View {
         .navigationTitle("Kata Sandi")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) { Text("Kata Sandi") }
             ToolbarItem(placement: .primaryAction) {
                 Button { showingAdd = true } label: { Image(systemName: "plus") }
             }
