@@ -1789,7 +1789,9 @@ final class BrowserSession: ObservableObject {
     /// the native menu cannot do it reliably: the button lives in the
     /// page itself. On YouTube it is inserted into the player's own
     /// control bar, right before the fullscreen button; on other pages
-    /// it floats anchored to the video's top-right corner.
+    /// it floats anchored to the video's top-right corner, just below
+    /// the player's settings (gear) button when one is visible there,
+    /// so the gear stays tappable.
     static let pipButtonScript = """
     (function() {
       if (window.__mdmPiPButton) return;
@@ -1860,6 +1862,39 @@ final class BrowserSession: ObservableObject {
         b.textContent = 'PiP';
         b.style.cssText = 'position:fixed;z-index:2147483647;padding:8px 14px;border:0;border-radius:999px;background:rgba(0,0,0,0.65);color:#fff;font:600 13px -apple-system,system-ui,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,0.35);';
       }
+      function gearRect(v, r) {
+        var gear = document.querySelector('.ytp-settings-button');
+        if (gear) {
+          var g = gear.getBoundingClientRect();
+          if (g.width > 0 && g.height > 0 && g.right >= r.left && g.left <= r.right && g.bottom >= r.top && g.top <= r.bottom) {
+            var cs = null;
+            try { cs = window.getComputedStyle(gear); } catch (e) {}
+            if (!cs || (cs.display !== 'none' && cs.visibility !== 'hidden')) return g;
+          }
+        }
+        var scope = null;
+        try { scope = v.closest('.html5-video-player'); } catch (e2) {}
+        if (!scope) {
+          scope = v;
+          for (var d = 0; d < 3 && scope.parentElement; d++) scope = scope.parentElement;
+        }
+        var bestRect = null;
+        var list = scope.querySelectorAll('button, [role="button"]');
+        for (var i = 0; i < list.length; i++) {
+          var el = list[i];
+          if (el === btn) continue;
+          var q = el.getBoundingClientRect();
+          if (q.width < 20 || q.height < 20) continue;
+          if (q.top < r.top - 4 || q.top > r.top + r.height * 0.35) continue;
+          if (q.right < r.right - 150 || q.left > r.right + 4) continue;
+          if (q.bottom < r.top || q.top > r.bottom) continue;
+          var cs2 = null;
+          try { cs2 = window.getComputedStyle(el); } catch (e3) {}
+          if (cs2 && (cs2.display === 'none' || cs2.visibility === 'hidden')) continue;
+          if (!bestRect || q.right > bestRect.right) bestRect = q;
+        }
+        return bestRect;
+      }
       function refresh() {
         var v = bestVideo();
         var show = !!(v && !v.ended && !inPiP(v));
@@ -1885,8 +1920,14 @@ final class BrowserSession: ObservableObject {
           }
           if (btn.parentNode !== document.documentElement) document.documentElement.appendChild(btn);
           var r = v.getBoundingClientRect();
-          btn.style.left = Math.max(8, r.right - 64) + 'px';
-          btn.style.top = Math.max(8, r.top + 10) + 'px';
+          var g = gearRect(v, r);
+          if (g) {
+            btn.style.left = Math.max(8, g.right - 64) + 'px';
+            btn.style.top = (g.bottom + 8) + 'px';
+          } else {
+            btn.style.left = Math.max(8, r.right - 64) + 'px';
+            btn.style.top = Math.max(8, r.top + 10) + 'px';
+          }
           btn.style.display = '';
         }
       }
