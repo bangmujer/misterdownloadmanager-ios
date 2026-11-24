@@ -233,7 +233,7 @@ final class AIChatStore: ObservableObject {
         var lines = [
             "# \(session.title)",
             "",
-            "Diekspor dari MDM iOS pada \(session.updatedAt.formatted(date: .long, time: .short)).",
+            "Diekspor dari MDM iOS pada \(session.updatedAt.formatted(date: .long, time: .shortened)).",
             "",
         ]
         for message in session.messages {

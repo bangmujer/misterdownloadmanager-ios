@@ -1239,14 +1239,13 @@ struct ImageGenerationView: View {
         guard !value.isEmpty else { return }
         isGenerating = true
         errorText = nil
-        _ = AIClient.generateImage(prompt: value, model: model, size: size, apiKey: apiKey) { result in
+        _ = AIClient.generateImage(prompt: value, model: model, size: size, apiKey: apiKey) { data, error in
             isGenerating = false
-            switch result {
-            case .success(let data):
+            if let data {
                 onImage(data, value)
                 dismiss()
-            case .failure(let message):
-                errorText = message
+            } else {
+                errorText = error ?? "Gagal membuat gambar."
             }
         }
     }

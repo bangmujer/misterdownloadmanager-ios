@@ -561,7 +561,7 @@ enum AIClient {
     /// Images API. Other providers cannot generate images from this
     /// app, and the Balitech gateway rejects image content outright.
     static func generateImage(prompt: String, model: String, size: String, apiKey: String,
-                              onDone: @escaping (Result<Data, String>) -> Void) -> Task<Void, Never> {
+                              onDone: @escaping (Data?, String?) -> Void) -> Task<Void, Never> {
         Task {
             var request = URLRequest(url: URL(string: "https://api.openai.com/v1/images/generations")!)
             request.httpMethod = "POST"
@@ -573,12 +573,12 @@ enum AIClient {
             do {
                 let (data, response) = try await URLSession.shared.data(for: request)
                 guard let http = response as? HTTPURLResponse else {
-                    await MainActor.run { onDone(.failure("Respons tidak dikenal dari OpenAI.")) }
+                    await MainActor.run { onDone(nil, "Respons tidak dikenal dari OpenAI.") }
                     return
                 }
                 guard (200..<300).contains(http.statusCode) else {
                     let snippet = String((String(data: data, encoding: .utf8) ?? "").prefix(300))
-                    await MainActor.run { onDone(.failure("Error HTTP \(http.statusCode) dari OpenAI: \(snippet)")) }
+                    await MainActor.run { onDone(nil, "Error HTTP \(http.statusCode) dari OpenAI: \(snippet)") }
                     return
                 }
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -586,13 +586,13 @@ enum AIClient {
                       let first = items.first,
                       let b64 = first["b64_json"] as? String,
                       let imageData = Data(base64Encoded: b64) else {
-                    await MainActor.run { onDone(.failure("OpenAI tidak mengembalikan gambar.")) }
+                    await MainActor.run { onDone(nil, "OpenAI tidak mengembalikan gambar.") }
                     return
                 }
-                await MainActor.run { onDone(.success(imageData)) }
+                await MainActor.run { onDone(imageData, nil) }
             } catch {
                 if Task.isCancelled { return }
-                await MainActor.run { onDone(.failure(error.localizedDescription)) }
+                await MainActor.run { onDone(nil, error.localizedDescription) }
             }
         }
     }
