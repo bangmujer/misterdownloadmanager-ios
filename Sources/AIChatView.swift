@@ -10,9 +10,18 @@ import SwiftUI
 // in-memory only: closing the app starts a fresh chat.
 
 private struct AIChatMessage: Identifiable, Equatable {
-    let id = UUID()
+    let id: UUID
     var role: String // "user" or "assistant"
     var text: String
+
+    // Explicit init: the synthesized memberwise init does not expose
+    // `id` (it has a default value), and the streaming path needs to
+    // construct a message with a known id to append tokens to.
+    init(id: UUID = UUID(), role: String, text: String) {
+        self.id = id
+        self.role = role
+        self.text = text
+    }
 }
 
 struct AIChatView: View {
