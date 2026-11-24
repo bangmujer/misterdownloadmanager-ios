@@ -165,7 +165,7 @@ struct AIAttachment: Equatable {
 /// `.fileImporter` silently drops selections when presented from a
 /// sheet, and the Ask AI sheet is itself presented from the browser —
 /// the same reason the extension import uses a UIKit presenter.
-private final class AIAttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIDocumentPickerDelegate {
+final class AIAttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIDocumentPickerDelegate {
     private var onImage: ((Data, String) -> Void)?
     private var onFile: ((URL) -> Void)?
 
