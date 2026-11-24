@@ -714,8 +714,7 @@ struct AskAIView: View {
                     if !answer.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Jawaban").font(.headline)
-                            Text(answer)
-                                .textSelection(.enabled)
+                            MarkdownChatView(text: answer)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .padding(14)

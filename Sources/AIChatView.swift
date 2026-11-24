@@ -481,14 +481,21 @@ struct AIChatView: View {
                         .background(Color(.tertiarySystemBackground), in: Capsule())
                     }
                 }
-                Text(message.text)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 12).padding(.vertical, 9)
-                    .background(
-                        message.role == "user" ? Color.accentColor : Color(.secondarySystemBackground),
-                        in: RoundedRectangle(cornerRadius: 16)
-                    )
-                    .foregroundStyle(message.role == "user" ? .white : .primary)
+                if message.role == "assistant" {
+                    // Assistant answers render Markdown ChatGPT-style:
+                    // headings, bold, code blocks with a copy button,
+                    // tables, lists. User messages stay literal text.
+                    MarkdownChatView(text: message.text)
+                        .padding(.horizontal, 12).padding(.vertical, 9)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+                        .foregroundStyle(.primary)
+                } else {
+                    Text(message.text)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 12).padding(.vertical, 9)
+                        .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 16))
+                        .foregroundStyle(.white)
+                }
             }
                 if message.role == "assistant" { Spacer(minLength: 48) }
             }
