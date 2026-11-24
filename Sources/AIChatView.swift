@@ -49,6 +49,7 @@ struct AIChatView: View {
     @StateObject private var transcriber = SpeechTranscriber()
     @State private var dictationBase = ""
     @State private var showingImageGen = false
+    @State private var composerActionsExpanded = false
     @State private var libraryProject: AIChatProject?
     @State private var exportingSession: AIChatSession?
     @State private var exportShareText: String?
@@ -136,46 +137,76 @@ struct AIChatView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 12).padding(.top, 8)
                 }
-                HStack(alignment: .bottom, spacing: 8) {
-                    Button { pickPhoto() } label: { Image(systemName: "photo") }
-                        .font(.system(size: 20))
-                        .frame(width: 38, height: 38)
-                        .disabled(isLoading)
-                    Button { pickFile() } label: { Image(systemName: "folder") }
-                        .font(.system(size: 20))
-                        .frame(width: 38, height: 38)
-                        .disabled(isLoading)
-                    Button { toggleDictation() } label: {
-                        Image(systemName: transcriber.isRecording ? "mic.fill" : "mic")
-                            .foregroundStyle(transcriber.isRecording ? .red : .primary)
-                    }
-                    .font(.system(size: 20))
-                    .frame(width: 38, height: 38)
-                    .disabled(isLoading)
-                    Button { showingImageGen = true } label: { Image(systemName: "wand.and.stars") }
-                        .font(.system(size: 20))
-                        .frame(width: 38, height: 38)
-                        .disabled(isLoading)
-                    TextField("Tulis pesan…", text: $draft, axis: .vertical)
-                        .lineLimit(1...4)
-                        .focused($inputFocused)
-                        .padding(.horizontal, 12).padding(.vertical, 10)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
-                        .onSubmit { send() }
-                    if isLoading {
-                        Button { stopRequest() } label: {
-                            Image(systemName: "stop.circle.fill")
-                                .font(.system(size: 32))
-                                .foregroundStyle(.red)
+                // iOS 26 Messages-style composer: one glass capsule
+                // holding a "+" action menu, the field, and a trailing
+                // button that swaps between mic and send like
+                // Messages does. Photo/file/image-generation live
+                // behind "+" so the row no longer stretches across
+                // the screen.
+                VStack(alignment: .leading, spacing: 8) {
+                    if composerActionsExpanded {
+                        HStack(spacing: 20) {
+                            composerActionButton(icon: "photo", label: "Foto") {
+                                composerActionsExpanded = false
+                                pickPhoto()
+                            }
+                            composerActionButton(icon: "folder", label: "File") {
+                                composerActionsExpanded = false
+                                pickFile()
+                            }
+                            composerActionButton(icon: "wand.and.stars", label: "Gambar AI") {
+                                composerActionsExpanded = false
+                                showingImageGen = true
+                            }
                         }
-                        .frame(width: 38, height: 38)
-                    } else {
-                        Button { send() } label: {
-                            Image(systemName: editingMessageID == nil ? "arrow.up.circle.fill" : "checkmark.circle.fill")
-                                .font(.system(size: 32))
-                        }
-                        .disabled(!canSend)
+                        .padding(.horizontal, 16)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
+                    HStack(spacing: 4) {
+                        Button {
+                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                composerActionsExpanded.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .frame(width: 32, height: 32)
+                                .background(Color(.tertiarySystemFill), in: Circle())
+                                .rotationEffect(.degrees(composerActionsExpanded ? 45 : 0))
+                        }
+                        .disabled(isLoading)
+                        TextField("Tulis pesan…", text: $draft, axis: .vertical)
+                            .lineLimit(1...4)
+                            .focused($inputFocused)
+                            .padding(.vertical, 8)
+                            .onSubmit { send() }
+                        if isLoading {
+                            Button { stopRequest() } label: {
+                                Image(systemName: "stop.circle.fill")
+                                    .font(.system(size: 30))
+                                    .foregroundStyle(.red)
+                            }
+                            .frame(width: 34, height: 34)
+                        } else if canSend {
+                            Button { send() } label: {
+                                Image(systemName: editingMessageID == nil ? "arrow.up.circle.fill" : "checkmark.circle.fill")
+                                    .font(.system(size: 30))
+                            }
+                        } else {
+                            Button { toggleDictation() } label: {
+                                Image(systemName: transcriber.isRecording ? "mic.fill" : "mic")
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .foregroundStyle(transcriber.isRecording ? .red : .primary)
+                                    .frame(width: 32, height: 32)
+                                    .background(Color(.tertiarySystemFill), in: Circle())
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(.primary.opacity(0.08), lineWidth: 0.5))
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
             }
@@ -671,6 +702,24 @@ struct AIChatView: View {
         return contentOK && !isLoading && !apiKey.isEmpty && !model.isEmpty && !missingEndpoint
     }
 
+    /// One action in the composer's expandable "+" strip: a glass
+    /// circle with a caption, like the iOS 26 Messages app strip.
+    private func composerActionButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .background(.ultraThinMaterial, in: Circle())
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .disabled(isLoading)
+    }
+
     private func loadModelAndKey() {
         model = store.browserSettings.aiModels[provider.rawValue] ?? provider.defaultModel
         // The catalog slug carries the bt/ prefix; an older stored
@@ -767,6 +816,7 @@ struct AIChatView: View {
 
     private func send() {
         transcriber.stop()
+        composerActionsExpanded = false
         // Confirming an edit re-sends the edited message instead of
         // appending a new one.
         if editingMessageID != nil { confirmEdit(); return }

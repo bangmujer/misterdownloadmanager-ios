@@ -428,7 +428,22 @@ enum AgentToolRunner {
     private static func runJavaScript(script: String, store: DownloadStore) async -> String {
         let trimmed = script.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "Script kosong." }
-        let result = await evaluateOnActiveTab(script: trimmed, store: store)
+        // WebKit's evaluateJavaScript fails the whole call when the
+        // script evaluates to an unbridgeable value (a function,
+        // Symbol, BigInt) — the "jenis yang tidak didukung" error in
+        // the tool log. Stringify inside the page instead, so every
+        // outcome comes back as a plain string.
+        let encoded: String
+        if let data = try? JSONSerialization.data(withJSONObject: [trimmed], options: []),
+           var json = String(data: data, encoding: .utf8), json.count >= 2 {
+            json.removeFirst()
+            json.removeLast()
+            encoded = json
+        } else {
+            encoded = "\"\""
+        }
+        let wrapped = "(function(){ try { const __mdmR = eval(\(encoded)); if (__mdmR === undefined) return 'undefined'; if (typeof __mdmR === 'function') return '[function ' + (__mdmR.name || 'anonymous') + ']'; try { const __mdmJ = JSON.stringify(__mdmR); if (__mdmJ !== undefined) return __mdmJ; } catch (__mdmE) {} return String(__mdmR); } catch (__mdmE) { return 'Error: ' + (__mdmE && __mdmE.message ? __mdmE.message : String(__mdmE)); } })()"
+        let result = await evaluateOnActiveTab(script: wrapped, store: store)
         return String(result.prefix(8000))
     }
 
