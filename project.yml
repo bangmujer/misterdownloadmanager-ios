@@ -41,6 +41,9 @@ targets:
         UILaunchScreen: {}
         CFBundleIconName: AppIcon
         CFBundleDisplayName: "Mister Download Manager"
+        # Without this the plist version stays 1.0 and the in-app
+        # build stamp reads "Build 1.0" on every build.
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         NSAppTransportSecurity:
@@ -79,7 +82,7 @@ targets:
       base:
         PRODUCT_NAME: "Mister Download Manager"
         PRODUCT_BUNDLE_IDENTIFIER: com.bangmujer.misterdownloadmanager
-        MARKETING_VERSION: "0.6.63"
+        MARKETING_VERSION: "0.6.64"
         # libsqlite3 is needed for `import SQLite3` (WQFiles-style SQLite viewer).
         OTHER_LDFLAGS: "$(inherited) -lsqlite3"
         CURRENT_PROJECT_VERSION: "1"

@@ -39,21 +39,6 @@ struct AIChatView: View {
     @State private var showingSettings = false
     @FocusState private var inputFocused: Bool
 
-    /// Height of the custom bottom tab bar, measured by ContentView.
-    /// The chat column pads itself above the bar by the part of that
-    /// height the propagated safe area does not already cover, so the
-    /// message field never slides underneath the bar.
-    /// No default value here: a `let` with a default cannot be assigned
-    /// again inside init (the 0.6.61 failure).
-    let bottomBarHeight: CGFloat
-
-    // Explicit init: a struct whose stored properties all have default
-    // values only gets a synthesized init() with no arguments, so the
-    // call site's bottomBarHeight: argument needs this.
-    init(bottomBarHeight: CGFloat = 0) {
-        self.bottomBarHeight = bottomBarHeight
-    }
-
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -107,12 +92,12 @@ struct AIChatView: View {
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
             }
-            // Full bar height, no subtraction: the safe-area value the
-            // GeometryReader reported already includes the bar, so
-            // subtracting it (v0.6.62) computed a zero padding and the
-            // field stayed covered. The plain column does not inset
-            // itself, so it needs the whole bar height.
-            .padding(.bottom, bottomBarHeight)
+            // Fixed 72pt: the pill's measured height on device. The
+            // column's bottom edge is the window safe area, so this
+            // parks the message field just above the lowered pill.
+            // (A measured height via PreferenceKey reported ~3x the
+            // real height and floated the field far too high.)
+            .padding(.bottom, 72)
             .navigationTitle("AI")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
