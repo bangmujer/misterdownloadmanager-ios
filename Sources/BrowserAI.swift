@@ -1019,6 +1019,7 @@ struct AskAIView: View {
     @State private var stopped = false
     @State private var requestTask: Task<Void, Never>?
     @State private var copiedTurnID: UUID?
+    @State private var viewerImage: ViewableImage?
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
@@ -1590,6 +1591,12 @@ struct AskAIView: View {
         .font(.caption)
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(Color(.tertiarySystemBackground), in: Capsule())
+        .onTapGesture {
+            if att.isImage, let uiImage = UIImage(data: att.data) {
+                viewerImage = ViewableImage(image: uiImage, fileName: att.fileName)
+            }
+        }
+        .fullScreenCover(item: $viewerImage) { ChatImageViewer(viewable: $0) }
     }
 
     private var composer: some View {

@@ -44,6 +44,7 @@ struct AIChatView: View {
     @State private var editingMessageID: UUID?
     @State private var stashedDraft = ""
     @State private var pendingHandoff: AIChatHandoff?
+    @State private var viewerImage: ViewableImage?
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -504,6 +505,10 @@ struct AIChatView: View {
                         Image(uiImage: uiImage).resizable().scaledToFit()
                             .frame(maxWidth: 220, maxHeight: 220)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .onTapGesture {
+                                viewerImage = ViewableImage(image: uiImage, fileName: att.fileName)
+                            }
+                            .fullScreenCover(item: $viewerImage) { ChatImageViewer(viewable: $0) }
                     } else {
                         HStack(spacing: 6) {
                             Image(systemName: "doc.fill")
