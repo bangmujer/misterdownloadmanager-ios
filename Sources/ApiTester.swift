@@ -294,8 +294,7 @@ struct ApiTesterView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
+        List {
                 requestSection
                 querySection
                 headersSection
@@ -315,7 +314,6 @@ struct ApiTesterView: View {
                 }
             }
             .onAppear { store.apiTester = apiStore }
-        }
     }
 
     // MARK: Sections
@@ -562,6 +560,37 @@ struct ApiTesterView: View {
             )
             draft = updated
             apiStore.upsert(updated)
+        }
+    }
+}
+
+// MARK: - Lainnya
+
+/// The "More" tab: secondary tools that do not need a main tab.
+/// Today it holds the API Tester; other tools can join later.
+struct LainnyaView: View {
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    NavigationLink {
+                        ApiTesterView()
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("API Tester")
+                                Text("Uji HTTP request dan baca responsnya")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "bolt.horizontal.circle")
+                                .foregroundStyle(.teal)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Lainnya")
         }
     }
 }

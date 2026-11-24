@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 /// Bottom tab bar (like the reference browser app): Downloads,
 /// Browser, AI chat, My Files, Settings.
 enum AppTab: Hashable {
-    case downloads, browser, api, ai, files, settings
+    case downloads, browser, ai, files, settings, lainnya
 }
 
 struct ContentView: View {
@@ -49,10 +49,6 @@ struct ContentView: View {
                 .tabItem { Label("Browser", systemImage: "globe") }
                 .tag(AppTab.browser)
 
-            ApiTesterView()
-                .tabItem { Label("API", systemImage: "bolt.horizontal.circle") }
-                .tag(AppTab.api)
-
             AIChatView()
                 .tabItem { Label("AI", systemImage: "sparkles") }
                 .tag(AppTab.ai)
@@ -64,6 +60,10 @@ struct ContentView: View {
             SettingsView(showsDoneButton: false)
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag(AppTab.settings)
+
+            LainnyaView()
+                .tabItem { Label("Lainnya", systemImage: "ellipsis.circle") }
+                .tag(AppTab.lainnya)
         }
         .onChange(of: store.aiHandoff) { handoff in
             if handoff != nil { selectedTab = .ai }
