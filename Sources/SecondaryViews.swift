@@ -285,7 +285,6 @@ struct SettingsView: View {
                     Link("License: GPL-3.0", destination: URL(string: "https://www.gnu.org/licenses/gpl-3.0.html")!)
                 }
             }
-            .navigationTitle("Options")
             .onChange(of: store.settings.language) { _ in store.save() }
             .toolbar {
                 ToolbarItem(placement: .principal) { Text("Options") }

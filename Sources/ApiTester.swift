@@ -309,14 +309,15 @@ struct ApiTesterView: View {
                 if let response { responseSection(response) }
                 historySection
             }
-            .navigationTitle("API Tester")
             .toolbar {
                 ToolbarItem(placement: .principal) { Text("API Tester") }
-                Button("Baru") {
-                    sendTask?.cancel()
-                    sending = false
-                    response = nil
-                    draft = ApiRequest.fresh(number: apiStore.nextNumber)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Baru") {
+                        sendTask?.cancel()
+                        sending = false
+                        response = nil
+                        draft = ApiRequest.fresh(number: apiStore.nextNumber)
+                    }
                 }
             }
             .onAppear { store.apiTester = apiStore }

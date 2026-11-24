@@ -72,7 +72,6 @@ struct PasswordsView: View {
             }
         }
         .searchable(text: $query, prompt: "Cari situs atau nama pengguna")
-        .navigationTitle("Kata Sandi")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) { Text("Kata Sandi") }
