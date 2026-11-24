@@ -97,7 +97,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
 
     var defaultModel: String {
         switch self {
-        case .gemini: return "gemini-2.0-flash"
+        case .gemini: return "gemini-3.8-flash"
         case .chatgpt: return "gpt-4o-mini"
         case .claude: return "claude-3-5-haiku-20241022"
         case .balitech: return "bt/deepseek-v4.1-flash"
@@ -1111,6 +1111,11 @@ struct AskAIView: View {
         // bare name for the same model is normalized to it once.
         if provider == .balitech, model == "deepseek-v4.1-flash" {
             model = "bt/deepseek-v4.1-flash"
+        }
+        // Google retired gemini-2.0-flash (HTTP 404); its own error
+        // message names gemini-3.8-flash as the replacement.
+        if provider == .gemini, model == "gemini-2.0-flash" {
+            model = "gemini-3.8-flash"
         }
         endpoint = store.browserSettings.aiCustomEndpoint
         let saved = KeychainHelper.load(account: provider.rawValue) ?? ""

@@ -262,7 +262,7 @@ struct BrowserSettings: Codable {
     // proxy/gateway); its base URL lives in aiCustomEndpoint.
     var aiProvider: String = "Gemini"
     var aiModels: [String: String] = [
-        "Gemini": "gemini-2.0-flash",
+        "Gemini": "gemini-3.8-flash",
         "ChatGPT": "gpt-4o-mini",
         "Claude": "claude-3-5-haiku-20241022",
         "Custom": "deepseek-v4.1-flash",

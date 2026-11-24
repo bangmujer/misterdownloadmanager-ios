@@ -589,6 +589,11 @@ struct AIChatView: View {
         if provider == .balitech, model == "deepseek-v4.1-flash" {
             model = "bt/deepseek-v4.1-flash"
         }
+        // Google retired gemini-2.0-flash (HTTP 404); its own error
+        // message names gemini-3.8-flash as the replacement.
+        if provider == .gemini, model == "gemini-2.0-flash" {
+            model = "gemini-3.8-flash"
+        }
         endpoint = store.browserSettings.aiCustomEndpoint
         let saved = KeychainHelper.load(account: provider.rawValue) ?? ""
         apiKey = saved
@@ -869,6 +874,9 @@ private struct AIChatSettingsView: View {
                 model = store.browserSettings.aiModels[newValue.rawValue] ?? newValue.defaultModel
                 if newValue == .balitech, model == "deepseek-v4.1-flash" {
                     model = "bt/deepseek-v4.1-flash"
+                }
+                if newValue == .gemini, model == "gemini-2.0-flash" {
+                    model = "gemini-3.8-flash"
                 }
                 endpoint = store.browserSettings.aiCustomEndpoint
                 let saved = KeychainHelper.load(account: newValue.rawValue) ?? ""
