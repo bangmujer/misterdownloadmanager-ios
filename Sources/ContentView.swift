@@ -7,6 +7,15 @@ enum AppTab: Hashable {
     case downloads, browser, ai, files, settings
 }
 
+/// Measured height of the custom bottom bar, so tab content that lives
+/// inside a NavigationStack (which does not inherit the TabView's
+/// safeAreaInset on this device) can pad itself above the bar instead
+/// of sliding underneath it.
+private struct TabBarHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 88
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct ContentView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.mdmScale) var scale
@@ -16,6 +25,7 @@ struct ContentView: View {
     @State private var showingTorrent = false
     @State private var addURLPreset = ""
     @State private var confirmDelete: DownloadItem?
+    @State private var tabBarHeight: CGFloat = 88
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -40,7 +50,7 @@ struct ContentView: View {
             BrowserView(onExitToDownloads: { selectedTab = .downloads })
                 .tag(AppTab.browser)
 
-            AIChatView()
+            AIChatView(bottomBarHeight: tabBarHeight)
                 .tag(AppTab.ai)
 
             DownloadedFilesView()
@@ -54,7 +64,15 @@ struct ContentView: View {
         // My Files) plus a separate icon-only gear circle for Settings,
         // like Telegram's detached search button — no label on it.
         .toolbar(.hidden, for: .tabBar)
-        .safeAreaInset(edge: .bottom) { customTabBar }
+        .safeAreaInset(edge: .bottom) {
+            customTabBar
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(key: TabBarHeightKey.self, value: proxy.size.height)
+                    }
+                )
+        }
+        .onPreferenceChange(TabBarHeightKey.self) { tabBarHeight = $0 }
         .overlay(alignment: .top) { clipboardBanner }
         .alert("Userscript diimpor", isPresented: Binding(get: { store.lastImportMessage != nil }, set: { if !$0 { store.lastImportMessage = nil } })) {
             Button("OK", role: .cancel) { store.lastImportMessage = nil }

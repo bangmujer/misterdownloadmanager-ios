@@ -39,9 +39,16 @@ struct AIChatView: View {
     @State private var showingSettings = false
     @FocusState private var inputFocused: Bool
 
+    /// Height of the custom bottom tab bar, measured by ContentView.
+    /// The chat column pads itself above the bar by the part of that
+    /// height the propagated safe area does not already cover, so the
+    /// message field never slides underneath the bar.
+    let bottomBarHeight: CGFloat = 0
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
+            GeometryReader { geo in
+                VStack(spacing: 0) {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
@@ -91,6 +98,8 @@ struct AIChatView: View {
                     }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
+            }
+            .padding(.bottom, max(0, bottomBarHeight - geo.safeAreaInsets.bottom))
             }
             .navigationTitle("AI")
             .navigationBarTitleDisplayMode(.inline)
