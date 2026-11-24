@@ -30,6 +30,7 @@ final class DownloadStore: ObservableObject {
     /// the AI agent tools list tabs and read the current page. Weak:
     /// the browser view owns the session.
     weak var browserSession: BrowserSession?
+    weak var apiTester: ApiTesterStore?
     @Published var browserHistory: [BrowserHistoryEntry] = []
     /// Saved website logins (passwords live in the Keychain, metadata in
     /// a JSON file). Changes forward to this store's objectWillChange so

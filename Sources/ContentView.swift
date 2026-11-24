@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 /// Bottom tab bar (like the reference browser app): Downloads,
 /// Browser, AI chat, My Files, Settings.
 enum AppTab: Hashable {
-    case downloads, browser, ai, files, settings
+    case downloads, browser, api, ai, files, settings
 }
 
 struct ContentView: View {
@@ -48,6 +48,10 @@ struct ContentView: View {
             BrowserView(onExitToDownloads: { selectedTab = .downloads })
                 .tabItem { Label("Browser", systemImage: "globe") }
                 .tag(AppTab.browser)
+
+            ApiTesterView()
+                .tabItem { Label("API", systemImage: "bolt.horizontal.circle") }
+                .tag(AppTab.api)
 
             AIChatView()
                 .tabItem { Label("AI", systemImage: "sparkles") }

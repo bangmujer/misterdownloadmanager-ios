@@ -1311,6 +1311,10 @@ struct ToolLogCard: View {
             return ("cylinder", .cyan)
         case "get_page_info":
             return ("doc.text", .mint)
+        case "list_api_requests":
+            return ("list.bullet", .teal)
+        case "read_api_request":
+            return ("doc.text.magnifyingglass", .teal)
         case "list_bookmarks":
             return ("bookmark", .yellow)
         case "list_history":

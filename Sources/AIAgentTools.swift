@@ -155,6 +155,16 @@ struct AgentTool {
             description: "Info halaman tab browser aktif: URL, judul, user-agent, ukuran viewport, charset, dan waktu muat.",
             parameters: object([:])
         ),
+        AgentTool(
+            name: "list_api_requests",
+            description: "Daftar request API yang tersimpan di API Tester: nama, method, URL, dan status terakhir.",
+            parameters: object([:])
+        ),
+        AgentTool(
+            name: "read_api_request",
+            description: "Baca detail satu request API tersimpan (method, URL, query, header, jenis auth, body) beserta respons terakhirnya. Nilai token, password, dan API key TIDAK PERNAH ditampilkan.",
+            parameters: object(["request": string("Nomor urut, nama, atau awalan id request dari list_api_requests.")], required: ["request"])
+        ),
     ]
 }
 
@@ -207,6 +217,10 @@ enum AgentToolRunner {
             return await storage(store: store)
         case "get_page_info":
             return await pageInfo(store: store)
+        case "list_api_requests":
+            return await apiRequests(store: store)
+        case "read_api_request":
+            return await apiRequestDetail(store: store, arguments: arguments)
         default:
             return "Perkakas tidak dikenal: \(name)."
         }
@@ -617,6 +631,91 @@ enum AgentToolRunner {
                 }
             }
         }
+    }
+
+    // MARK: - API Tester (read-only)
+
+    @MainActor
+    private static func apiRequests(store: DownloadStore) -> String {
+        guard let tester = store.apiTester, !tester.saved.isEmpty else {
+            return "Belum ada request API tersimpan. Buka tab API untuk membuatnya."
+        }
+        return tester.saved.enumerated().map { index, request in
+            var line = "\(index + 1). \(request.method.rawValue) \(request.name) — \(request.url.isEmpty ? "(belum ada URL)" : request.url)"
+            if let last = request.lastResponse, let status = last.status {
+                line += " (terakhir: \(status))"
+            }
+            return line
+        }.joined(separator: "\n")
+    }
+
+    /// Full detail of one saved request plus its last response.
+    /// Credential-shaped values are never shown: auth tokens,
+    /// passwords, and API keys, and Authorization-style headers,
+    /// are replaced with "(disembunyikan)".
+    @MainActor
+    private static func apiRequestDetail(store: DownloadStore, arguments: [String: Any]) -> String {
+        guard let tester = store.apiTester else {
+            return "API Tester belum dibuka. Buka tab API dulu, lalu tanya lagi."
+        }
+        let query = (arguments["request"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            return "Sebutkan nomor atau nama request-nya."
+        }
+        let found: ApiRequest?
+        if let number = Int(query), number >= 1, number <= tester.saved.count {
+            found = tester.saved[number - 1]
+        } else if let byName = tester.saved.first(where: { $0.name.localizedCaseInsensitiveContains(query) }) {
+            found = byName
+        } else {
+            found = tester.saved.first(where: { $0.id.uuidString.hasPrefix(query) })
+        }
+        guard let request = found else {
+            return "Request API tidak ditemukan: \(query)."
+        }
+        var lines = ["\(request.method.rawValue) \(request.name)", "URL: \(request.url.isEmpty ? "(belum ada URL)" : request.url)"]
+        let enabledQuery = request.query.filter { $0.enabled && !$0.key.isEmpty }
+        if !enabledQuery.isEmpty {
+            lines.append("Query: " + enabledQuery.map { "\($0.key)=\($0.value)" }.joined(separator: ", "))
+        }
+        let enabledHeaders = request.headers.filter { $0.enabled && !$0.key.isEmpty }
+        if !enabledHeaders.isEmpty {
+            lines.append("Headers:")
+            for header in enabledHeaders {
+                let lower = header.key.lowercased()
+                let sensitive = lower.contains("authorization") || lower.contains("api-key")
+                    || lower.contains("token") || lower == "cookie"
+                lines.append("  \(header.key): \(sensitive ? "(disembunyikan)" : header.value)")
+            }
+        }
+        var authLine = "Auth: \(request.auth.kind.label)"
+        switch request.auth.kind {
+        case .basic:
+            authLine += " (username: \(request.auth.username), password: (disembunyikan))"
+        case .bearer:
+            authLine += " (token: (disembunyikan))"
+        case .apiKey:
+            authLine += " (header: \(request.auth.headerName), key: (disembunyikan))"
+        case .none:
+            break
+        }
+        lines.append(authLine)
+        if request.method.allowsBody && !request.body.isEmpty {
+            lines.append("Body (\(request.bodyKind.label)):\n\(String(request.body.prefix(4000)))")
+        }
+        if let last = request.lastResponse {
+            if let error = last.error {
+                lines.append("Respons terakhir: error — \(error)")
+            } else if let status = last.status {
+                lines.append("Respons terakhir: \(status) • \(last.durationMs) ms • \(last.size) byte")
+            }
+            if !last.body.isEmpty {
+                lines.append("Body respons:\n\(String(last.body.prefix(4000)))")
+            }
+        } else {
+            lines.append("Belum pernah dikirim.")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func pageText(store: DownloadStore) async -> String {
