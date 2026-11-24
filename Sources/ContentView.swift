@@ -7,6 +7,19 @@ enum AppTab: Hashable {
     case downloads, browser, ai, files, settings
 }
 
+/// iOS 26 liquid glass background, with the old frosted material as the
+/// fallback on earlier systems.
+private struct LiquidGlassBackground<S: Shape>: ViewModifier {
+    var shape: S
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.mdmScale) var scale
@@ -18,7 +31,11 @@ struct ContentView: View {
     @State private var confirmDelete: DownloadItem?
 
     var body: some View {
-        TabView(selection: $selectedTab) {
+        // No TabView: on iOS 26 the system tab bar's empty glass
+        // capsule keeps drawing behind our custom bar even with its
+        // toolbar hidden, so tabs are switched manually here and every
+        // root view stays mounted (state is preserved across switches).
+        ZStack {
             NavigationStack {
                 downloadList
                     .navigationTitle(titleForCategory)
@@ -35,25 +52,29 @@ struct ContentView: View {
                         Button("Batal", role: .cancel) {}
                     }
             }
-            .tag(AppTab.downloads)
+            .opacity(selectedTab == .downloads ? 1 : 0)
+            .allowsHitTesting(selectedTab == .downloads)
 
             BrowserView(onExitToDownloads: { selectedTab = .downloads })
-                .tag(AppTab.browser)
+                .opacity(selectedTab == .browser ? 1 : 0)
+                .allowsHitTesting(selectedTab == .browser)
 
             AIChatView()
-                .tag(AppTab.ai)
+                .opacity(selectedTab == .ai ? 1 : 0)
+                .allowsHitTesting(selectedTab == .ai)
 
             DownloadedFilesView()
-                .tag(AppTab.files)
+                .opacity(selectedTab == .files ? 1 : 0)
+                .allowsHitTesting(selectedTab == .files)
 
             SettingsView(showsDoneButton: false)
-                .tag(AppTab.settings)
+                .opacity(selectedTab == .settings ? 1 : 0)
+                .allowsHitTesting(selectedTab == .settings)
         }
-        // Custom Telegram-style bar: the system tab bar is hidden and
-        // replaced by a floating glass pill (Downloads, Browser, AI,
-        // My Files) plus a separate icon-only gear circle for Settings,
-        // like Telegram's detached search button — no label on it.
-        .toolbar(.hidden, for: .tabBar)
+        // Custom Telegram-style bar: a floating liquid-glass pill
+        // (Downloads, Browser, AI, My Files) plus a separate
+        // icon-only gear circle for Settings, like Telegram's detached
+        // search button — no label on it.
         .safeAreaInset(edge: .bottom) { customTabBar }
         .overlay(alignment: .top) { clipboardBanner }
         .alert("Userscript diimpor", isPresented: Binding(get: { store.lastImportMessage != nil }, set: { if !$0 { store.lastImportMessage = nil } })) {
@@ -76,7 +97,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 6)
             .padding(.vertical, 6)
-            .background(.ultraThinMaterial, in: Capsule())
+            .modifier(LiquidGlassBackground(shape: Capsule()))
             .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
 
             Button { selectedTab = .settings } label: {
@@ -86,7 +107,7 @@ struct ContentView: View {
                     .frame(width: 56, height: 56)
             }
             .buttonStyle(.plain)
-            .background(.ultraThinMaterial, in: Circle())
+            .modifier(LiquidGlassBackground(shape: Circle()))
             .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
         }
         .padding(.horizontal, 16)

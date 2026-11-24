@@ -92,12 +92,11 @@ struct AIChatView: View {
                 }
                 .padding(.horizontal, 12).padding(.vertical, 10)
             }
-            // Fixed 72pt: the pill's measured height on device. The
-            // column's bottom edge is the window safe area, so this
-            // parks the message field just above the lowered pill.
-            // (A measured height via PreferenceKey reported ~3x the
-            // real height and floated the field far too high.)
-            .padding(.bottom, 72)
+            // Fixed 12pt: the TabView's safeAreaInset already parks the
+            // column's bottom edge above the pill, so the field only
+            // needs a small gap — the old 72pt (from the discarded
+            // bar-height measurement) floated it far above the bar.
+            .padding(.bottom, 12)
             .navigationTitle("AI")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
