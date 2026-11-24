@@ -147,18 +147,32 @@ struct AIAttachment: Equatable, Codable {
         return AIAttachment(fileName: fileName, mimeType: mime, data: data, isImage: false)
     }
 
+    /// Downscale + re-encode as JPEG, capped so provider gateways
+    /// don't reject the request body (HTTP 413 "length limit
+    /// exceeded"): a busy 1568px photo at quality 0.85 can still be
+    /// ~1 MB, which base64 inflates by a third. 1024px with a
+    /// quality ladder keeps the payload at or under ~500 KB while
+    /// staying sharp enough for vision models.
     private static func downscaledJPEG(_ image: UIImage) -> Data {
-        let maxEdge: CGFloat = 1568
+        let maxEdge: CGFloat = 1024
+        let byteCap = 500_000
         let size = image.size
         let longest = max(size.width, size.height)
-        guard longest > maxEdge else {
-            return image.jpegData(compressionQuality: 0.85) ?? Data()
+        var work = image
+        if longest > maxEdge {
+            let scale = maxEdge / longest
+            let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+            let renderer = UIGraphicsImageRenderer(size: newSize)
+            work = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
         }
-        let scale = maxEdge / longest
-        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: newSize)
-        let resized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: newSize)) }
-        return resized.jpegData(compressionQuality: 0.85) ?? Data()
+        var best = work.jpegData(compressionQuality: 0.8) ?? Data()
+        if best.count <= byteCap { return best }
+        for quality in [0.65, 0.5, 0.35] as [CGFloat] {
+            let attempt = work.jpegData(compressionQuality: quality) ?? Data()
+            if attempt.count < best.count { best = attempt }
+            if attempt.count <= byteCap { return attempt }
+        }
+        return best
     }
 }
 
@@ -490,6 +504,10 @@ enum AIClient {
                     return
                 }
                 guard (200..<300).contains(http.statusCode) else {
+                    if http.statusCode == 413 {
+                        await MainActor.run { onDone("Lampiran terlalu besar untuk server \(provider.displayName) (HTTP 413 — badan request melebihi batas gateway). Coba kirim foto/file yang lebih kecil.") }
+                        return
+                    }
                     var body = ""
                     for try await line in bytes.lines { body += line + "\n" }
                     let snippet = String(body.prefix(300))
