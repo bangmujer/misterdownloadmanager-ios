@@ -165,6 +165,11 @@ struct AgentTool {
             description: "Baca detail satu request API tersimpan (method, URL, query, header, jenis auth, body) beserta respons terakhirnya. Nilai token, password, dan API key TIDAK PERNAH ditampilkan.",
             parameters: object(["request": string("Nomor urut, nama, atau awalan id request dari list_api_requests.")], required: ["request"])
         ),
+        AgentTool(
+            name: "send_api_request",
+            description: "Kirim satu request API yang sudah tersimpan di API Tester dan baca respons lengkapnya (status, header, body). Hanya request tersimpan yang bisa dikirim — AI tidak bisa membuat URL baru.",
+            parameters: object(["request": string("Nomor urut, nama, atau awalan id request dari list_api_requests.")], required: ["request"])
+        ),
     ]
 }
 
@@ -221,6 +226,8 @@ enum AgentToolRunner {
             return await apiRequests(store: store)
         case "read_api_request":
             return await apiRequestDetail(store: store, arguments: arguments)
+        case "send_api_request":
+            return await sendApiRequest(store: store, arguments: arguments)
         default:
             return "Perkakas tidak dikenal: \(name)."
         }
@@ -633,11 +640,30 @@ enum AgentToolRunner {
         }
     }
 
-    // MARK: - API Tester (read-only)
+    // MARK: - API Tester (read + send saved requests)
+
+    /// The live store when the API tab has been opened, otherwise a
+    /// fresh store reading the same saved file, so the tools work
+    /// even before the tab is ever opened.
+    @MainActor
+    private static func apiTesterStore(store: DownloadStore) -> ApiTesterStore {
+        store.apiTester ?? ApiTesterStore()
+    }
+
+    private static func findApiRequest(in saved: [ApiRequest], query: String) -> ApiRequest? {
+        if let number = Int(query), number >= 1, number <= saved.count {
+            return saved[number - 1]
+        }
+        if let byName = saved.first(where: { $0.name.localizedCaseInsensitiveContains(query) }) {
+            return byName
+        }
+        return saved.first(where: { $0.id.uuidString.hasPrefix(query) })
+    }
 
     @MainActor
     private static func apiRequests(store: DownloadStore) -> String {
-        guard let tester = store.apiTester, !tester.saved.isEmpty else {
+        let tester = apiTesterStore(store: store)
+        guard !tester.saved.isEmpty else {
             return "Belum ada request API tersimpan. Buka tab API untuk membuatnya."
         }
         return tester.saved.enumerated().map { index, request in
@@ -655,22 +681,12 @@ enum AgentToolRunner {
     /// are replaced with "(disembunyikan)".
     @MainActor
     private static func apiRequestDetail(store: DownloadStore, arguments: [String: Any]) -> String {
-        guard let tester = store.apiTester else {
-            return "API Tester belum dibuka. Buka tab API dulu, lalu tanya lagi."
-        }
+        let tester = apiTesterStore(store: store)
         let query = (arguments["request"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
             return "Sebutkan nomor atau nama request-nya."
         }
-        let found: ApiRequest?
-        if let number = Int(query), number >= 1, number <= tester.saved.count {
-            found = tester.saved[number - 1]
-        } else if let byName = tester.saved.first(where: { $0.name.localizedCaseInsensitiveContains(query) }) {
-            found = byName
-        } else {
-            found = tester.saved.first(where: { $0.id.uuidString.hasPrefix(query) })
-        }
-        guard let request = found else {
+        guard let request = findApiRequest(in: tester.saved, query: query) else {
             return "Request API tidak ditemukan: \(query)."
         }
         var lines = ["\(request.method.rawValue) \(request.name)", "URL: \(request.url.isEmpty ? "(belum ada URL)" : request.url)"]
@@ -707,13 +723,64 @@ enum AgentToolRunner {
             if let error = last.error {
                 lines.append("Respons terakhir: error — \(error)")
             } else if let status = last.status {
-                lines.append("Respons terakhir: \(status) • \(last.durationMs) ms • \(last.size) byte")
+                lines.append("Respons terakhir: \(status) \(HTTPURLResponse.localizedString(forStatusCode: status)) • \(last.durationMs) ms • \(last.size) byte")
+            }
+            if !last.headers.isEmpty {
+                lines.append("Header respons:")
+                for key in last.headers.keys.sorted() {
+                    lines.append("  \(key): \(last.headers[key] ?? "")")
+                }
             }
             if !last.body.isEmpty {
-                lines.append("Body respons:\n\(String(last.body.prefix(4000)))")
+                lines.append("Body respons:\n\(String(last.body.prefix(8000)))")
             }
         } else {
             lines.append("Belum pernah dikirim.")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Sends a SAVED request with the same sender the tester tab
+    /// uses, persists the fresh response, and returns the full
+    /// response (status, headers, body up to 8000 characters).
+    /// The model cannot invent a new URL or headers here: only
+    /// requests the user already composed and saved can run.
+    @MainActor
+    private static func sendApiRequest(store: DownloadStore, arguments: [String: Any]) async -> String {
+        let tester = apiTesterStore(store: store)
+        let query = (arguments["request"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else {
+            return "Sebutkan nomor atau nama request-nya."
+        }
+        guard let request = findApiRequest(in: tester.saved, query: query) else {
+            return "Request API tidak ditemukan: \(query)."
+        }
+        let result = await ApiTesterView.send(request)
+        var updated = request
+        updated.lastResponse = ApiLastResponse(
+            status: result.status,
+            durationMs: result.durationMs,
+            size: result.size,
+            headers: Dictionary(result.headers, uniquingKeysWith: { first, _ in first }),
+            body: String(result.bodyText.prefix(8000)),
+            error: result.error,
+            ranAt: Date()
+        )
+        tester.upsert(updated)
+        var lines: [String] = ["Terkirim: \(request.method.rawValue) \(request.name)"]
+        if let error = result.error {
+            lines.append("Error: \(error)")
+        } else if let status = result.status {
+            lines.append("Respons: \(status) \(HTTPURLResponse.localizedString(forStatusCode: status)) • \(result.durationMs) ms • \(result.size) byte")
+        }
+        if !result.headers.isEmpty {
+            lines.append("Headers:")
+            for header in result.headers {
+                lines.append("  \(header.0): \(header.1)")
+            }
+        }
+        if !result.bodyText.isEmpty {
+            lines.append("Body:\n\(String(result.bodyText.prefix(8000)))")
         }
         return lines.joined(separator: "\n")
     }
