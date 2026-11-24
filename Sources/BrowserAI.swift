@@ -136,6 +136,95 @@ enum AIProvider: String, CaseIterable, Identifiable {
         )
     }
 
+    /// Current ChatGPT chat/reasoning models from OpenAI's model
+    /// catalog (https://developers.openai.com/api/docs/models/all,
+    /// verified 2026-11-24). Only models served on the Chat
+    /// Completions API are listed: image, realtime/audio,
+    /// moderation, embedding, cyber, restricted and open-weight
+    /// models are excluded, as are deprecated/shut-down ones
+    /// (gpt-4o, gpt-4o-mini, gpt-5, o3, ...). The "Kustom…" row
+    /// keeps any other id reachable by typing.
+    struct ChatGPTModel: Hashable {
+        let id: String
+        let name: String
+    }
+
+    static let chatgptModels: [ChatGPTModel] = [
+        ChatGPTModel(id: "gpt-6.2-astra", name: "GPT-6.2 Astra"),
+        ChatGPTModel(id: "gpt-6.2-sol", name: "GPT-6.2 Sol"),
+        ChatGPTModel(id: "gpt-6.1-terra", name: "GPT-6.1 Terra"),
+        ChatGPTModel(id: "gpt-6-luna", name: "GPT-6 Luna"),
+        ChatGPTModel(id: "gpt-6-astra", name: "GPT-6 Astra"),
+        ChatGPTModel(id: "gpt-6.1-sol", name: "GPT-6.1 Sol"),
+        ChatGPTModel(id: "gpt-6-sol", name: "GPT-6 Sol"),
+        ChatGPTModel(id: "gpt-5.6-sol", name: "GPT-5.6 Sol"),
+        ChatGPTModel(id: "gpt-5.6-terra", name: "GPT-5.6 Terra"),
+        ChatGPTModel(id: "gpt-5.6-luna", name: "GPT-5.6 Luna"),
+        ChatGPTModel(id: "gpt-5.5", name: "GPT-5.5"),
+        ChatGPTModel(id: "gpt-5.5-pro", name: "GPT-5.5 Pro"),
+        ChatGPTModel(id: "gpt-5.4", name: "GPT-5.4"),
+        ChatGPTModel(id: "gpt-5.4-pro", name: "GPT-5.4 Pro"),
+        ChatGPTModel(id: "gpt-5.4-mini", name: "GPT-5.4 Mini"),
+        ChatGPTModel(id: "gpt-5.2", name: "GPT-5.2"),
+        ChatGPTModel(id: "gpt-5.2-pro", name: "GPT-5.2 Pro"),
+    ]
+
+    static let chatgptCustomTag = "__kustom__"
+
+    static func isChatGPTCatalogModel(_ id: String) -> Bool {
+        chatgptModels.contains(where: { $0.id == id })
+    }
+
+    static func chatgptModelPickerBinding(model: Binding<String>) -> Binding<String> {
+        Binding(
+            get: { isChatGPTCatalogModel(model.wrappedValue) ? model.wrappedValue : chatgptCustomTag },
+            set: { if $0 != chatgptCustomTag { model.wrappedValue = $0 } }
+        )
+    }
+
+    /// Current Claude models from Anthropic's model list
+    /// (https://platform.claude.com/docs/en/models/overview, verified
+    /// 2026-11-24): latest, specialized and still-Active legacy
+    /// models. All Claude models are text/chat models on the
+    /// Messages API. Deprecated (Opus/Sonnet 4.5) and retired
+    /// models (Opus/Sonnet 4, 4.1, Claude 3.x) are excluded.
+    struct ClaudeModel: Hashable {
+        let id: String
+        let name: String
+    }
+
+    static let claudeModels: [ClaudeModel] = [
+        ClaudeModel(id: "claude-opus-5-5", name: "Claude Opus 5.5"),
+        ClaudeModel(id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5"),
+        ClaudeModel(id: "claude-haiku-5-5", name: "Claude Haiku 5.5"),
+        ClaudeModel(id: "claude-fable-5-2", name: "Claude Fable 5.2"),
+        ClaudeModel(id: "claude-mythos-5-2", name: "Claude Mythos 5.2"),
+        ClaudeModel(id: "claude-fable-5-1", name: "Claude Fable 5.1"),
+        ClaudeModel(id: "claude-mythos-5-1", name: "Claude Mythos 5.1"),
+        ClaudeModel(id: "claude-fable-5", name: "Claude Fable 5"),
+        ClaudeModel(id: "claude-mythos-5", name: "Claude Mythos 5"),
+        ClaudeModel(id: "claude-opus-5", name: "Claude Opus 5"),
+        ClaudeModel(id: "claude-opus-4-8", name: "Claude Opus 4.8"),
+        ClaudeModel(id: "claude-opus-4-7", name: "Claude Opus 4.7"),
+        ClaudeModel(id: "claude-opus-4-6", name: "Claude Opus 4.6"),
+        ClaudeModel(id: "claude-sonnet-5", name: "Claude Sonnet 5"),
+        ClaudeModel(id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6"),
+        ClaudeModel(id: "claude-haiku-4-5", name: "Claude Haiku 4.5"),
+    ]
+
+    static let claudeCustomTag = "__kustom__"
+
+    static func isClaudeCatalogModel(_ id: String) -> Bool {
+        claudeModels.contains(where: { $0.id == id })
+    }
+
+    static func claudeModelPickerBinding(model: Binding<String>) -> Binding<String> {
+        Binding(
+            get: { isClaudeCatalogModel(model.wrappedValue) ? model.wrappedValue : claudeCustomTag },
+            set: { if $0 != claudeCustomTag { model.wrappedValue = $0 } }
+        )
+    }
+
     var id: String { rawValue }
     var displayName: String { rawValue }
 
@@ -144,8 +233,8 @@ enum AIProvider: String, CaseIterable, Identifiable {
     var defaultModel: String {
         switch self {
         case .gemini: return "gemini-3.8-flash"
-        case .chatgpt: return "gpt-4o-mini"
-        case .claude: return "claude-3-5-haiku-20241022"
+        case .chatgpt: return "gpt-6-luna"
+        case .claude: return "claude-haiku-4-5"
         case .balitech: return "bt/deepseek-v4.1-flash"
         case .custom: return "deepseek-v4.1-flash"
         case .meta: return ""
@@ -1015,6 +1104,42 @@ struct AskAIView: View {
                                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
                                 }
                                 Text(model).font(.caption).foregroundStyle(.secondary)
+                            } else if provider == .chatgpt {
+                                Picker("Model", selection: AIProvider.chatgptModelPickerBinding(model: $model)) {
+                                    ForEach(AIProvider.chatgptModels, id: \.id) { m in
+                                        Text(m.name).tag(m.id)
+                                    }
+                                    Text("Kustom…").tag(AIProvider.chatgptCustomTag)
+                                }
+                                .pickerStyle(.menu)
+                                .padding(.horizontal, 12).padding(.vertical, 10)
+                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                if !AIProvider.isChatGPTCatalogModel(model) {
+                                    TextField("Model", text: $model)
+                                        .focused($fieldFocused)
+                                        .autocapitalization(.none).autocorrectionDisabled()
+                                        .padding(.horizontal, 12).padding(.vertical, 10)
+                                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                }
+                                Text(model).font(.caption).foregroundStyle(.secondary)
+                            } else if provider == .claude {
+                                Picker("Model", selection: AIProvider.claudeModelPickerBinding(model: $model)) {
+                                    ForEach(AIProvider.claudeModels, id: \.id) { m in
+                                        Text(m.name).tag(m.id)
+                                    }
+                                    Text("Kustom…").tag(AIProvider.claudeCustomTag)
+                                }
+                                .pickerStyle(.menu)
+                                .padding(.horizontal, 12).padding(.vertical, 10)
+                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                if !AIProvider.isClaudeCatalogModel(model) {
+                                    TextField("Model", text: $model)
+                                        .focused($fieldFocused)
+                                        .autocapitalization(.none).autocorrectionDisabled()
+                                        .padding(.horizontal, 12).padding(.vertical, 10)
+                                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                }
+                                Text(model).font(.caption).foregroundStyle(.secondary)
                             } else {
                                 TextField("Model", text: $model)
                                     .focused($fieldFocused)
@@ -1180,6 +1305,16 @@ struct AskAIView: View {
         // message names gemini-3.8-flash as the replacement.
         if provider == .gemini, model == "gemini-2.0-flash" {
             model = "gemini-3.8-flash"
+        }
+        // OpenAI deprecated gpt-4o-mini (shutdown 14 Jan 2027) and
+        // names gpt-6-luna as its replacement.
+        if provider == .chatgpt, model == "gpt-4o-mini" {
+            model = "gpt-6-luna"
+        }
+        // Anthropic retired claude-3-5-haiku-20241022; the named
+        // replacement is Haiku 4.5 (stored here by its alias).
+        if provider == .claude, model == "claude-3-5-haiku-20241022" {
+            model = "claude-haiku-4-5"
         }
         endpoint = store.browserSettings.aiCustomEndpoint
         let saved = KeychainHelper.load(account: provider.rawValue) ?? ""

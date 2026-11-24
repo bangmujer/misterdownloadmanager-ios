@@ -263,8 +263,8 @@ struct BrowserSettings: Codable {
     var aiProvider: String = "Gemini"
     var aiModels: [String: String] = [
         "Gemini": "gemini-3.8-flash",
-        "ChatGPT": "gpt-4o-mini",
-        "Claude": "claude-3-5-haiku-20241022",
+        "ChatGPT": "gpt-6-luna",
+        "Claude": "claude-haiku-4-5",
         "Custom": "deepseek-v4.1-flash",
     ]
     var aiCustomEndpoint: String = "https://balitechsolution.com/v3"

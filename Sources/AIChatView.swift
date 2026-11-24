@@ -594,6 +594,16 @@ struct AIChatView: View {
         if provider == .gemini, model == "gemini-2.0-flash" {
             model = "gemini-3.8-flash"
         }
+        // OpenAI deprecated gpt-4o-mini (shutdown 14 Jan 2027) and
+        // names gpt-6-luna as its replacement.
+        if provider == .chatgpt, model == "gpt-4o-mini" {
+            model = "gpt-6-luna"
+        }
+        // Anthropic retired claude-3-5-haiku-20241022; the named
+        // replacement is Haiku 4.5 (stored here by its alias).
+        if provider == .claude, model == "claude-3-5-haiku-20241022" {
+            model = "claude-haiku-4-5"
+        }
         endpoint = store.browserSettings.aiCustomEndpoint
         let saved = KeychainHelper.load(account: provider.rawValue) ?? ""
         apiKey = saved
@@ -830,6 +840,30 @@ private struct AIChatSettingsView: View {
                                 .autocapitalization(.none).autocorrectionDisabled()
                         }
                         Text(model).font(.caption).foregroundStyle(.secondary)
+                    } else if provider == .chatgpt {
+                        Picker("Model", selection: AIProvider.chatgptModelPickerBinding(model: $model)) {
+                            ForEach(AIProvider.chatgptModels, id: \.id) { m in
+                                Text(m.name).tag(m.id)
+                            }
+                            Text("Kustom…").tag(AIProvider.chatgptCustomTag)
+                        }
+                        if !AIProvider.isChatGPTCatalogModel(model) {
+                            TextField("Model", text: $model)
+                                .autocapitalization(.none).autocorrectionDisabled()
+                        }
+                        Text(model).font(.caption).foregroundStyle(.secondary)
+                    } else if provider == .claude {
+                        Picker("Model", selection: AIProvider.claudeModelPickerBinding(model: $model)) {
+                            ForEach(AIProvider.claudeModels, id: \.id) { m in
+                                Text(m.name).tag(m.id)
+                            }
+                            Text("Kustom…").tag(AIProvider.claudeCustomTag)
+                        }
+                        if !AIProvider.isClaudeCatalogModel(model) {
+                            TextField("Model", text: $model)
+                                .autocapitalization(.none).autocorrectionDisabled()
+                        }
+                        Text(model).font(.caption).foregroundStyle(.secondary)
                     } else {
                         TextField("Model", text: $model)
                             .autocapitalization(.none).autocorrectionDisabled()
@@ -889,6 +923,12 @@ private struct AIChatSettingsView: View {
                 }
                 if newValue == .gemini, model == "gemini-2.0-flash" {
                     model = "gemini-3.8-flash"
+                }
+                if newValue == .chatgpt, model == "gpt-4o-mini" {
+                    model = "gpt-6-luna"
+                }
+                if newValue == .claude, model == "claude-3-5-haiku-20241022" {
+                    model = "claude-haiku-4-5"
                 }
                 endpoint = store.browserSettings.aiCustomEndpoint
                 let saved = KeychainHelper.load(account: newValue.rawValue) ?? ""
