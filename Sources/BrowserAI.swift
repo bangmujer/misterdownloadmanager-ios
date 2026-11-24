@@ -1719,19 +1719,14 @@ struct AskAIView: View {
                             .rotationEffect(.degrees(composerActionsExpanded ? 45 : 0))
                     }
                     .disabled(isLoading || provider == .meta)
-                    ZStack(alignment: .topLeading) {
-                        TextEditor(text: $question)
-                            .focused($fieldFocused)
-                            .frame(minHeight: 44, maxHeight: 110)
-                            .padding(8)
-                            .scrollContentBackground(.hidden)
-                        if question.isEmpty {
-                            Text("Tulis pertanyaan…")
-                                .font(.subheadline).foregroundStyle(.tertiary)
-                                .padding(.horizontal, 16).padding(.vertical, 16)
-                                .allowsHitTesting(false)
-                        }
-                    }
+                    // Same field as the AI tab: a vertical-axis
+                    // TextField capped at 5 lines. The previous
+                    // TextEditor grew unbounded in this sheet and
+                    // blew the capsule up to half the sheet.
+                    TextField("Tulis pertanyaan…", text: $question, axis: .vertical)
+                        .lineLimit(1...5)
+                        .focused($fieldFocused)
+                        .padding(.vertical, 8)
                     if isLoading {
                         Button { stopStreaming() } label: {
                             Image(systemName: "stop.circle.fill")
@@ -1762,6 +1757,9 @@ struct AskAIView: View {
                         .disabled(provider == .meta)
                     }
                 }
+                // Hug the content height: the capsule must never
+                // stretch to fill the sheet.
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 6)
                 .background(.ultraThinMaterial, in: Capsule())
