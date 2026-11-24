@@ -225,6 +225,16 @@ enum AIProvider: String, CaseIterable, Identifiable {
         )
     }
 
+    /// Current OpenAI image models from the model catalog
+    /// (verified 2026-11-24) for the Images API. Older image models
+    /// (gpt-image-1, DALL-E) are deprecated/shut down.
+    static let chatgptImageModels: [ChatGPTModel] = [
+        ChatGPTModel(id: "gpt-image-2.6-sunburst", name: "GPT Image 2.6 Sunburst"),
+        ChatGPTModel(id: "gpt-image-2.6-flare", name: "GPT Image 2.6 Flare"),
+        ChatGPTModel(id: "gpt-image-2.5-sunburst", name: "GPT Image 2.5 Sunburst"),
+        ChatGPTModel(id: "gpt-image-2.5-flare", name: "GPT Image 2.5 Flare"),
+    ]
+
     var id: String { rawValue }
     var displayName: String { rawValue }
 
@@ -544,6 +554,46 @@ enum AIClient {
                 }
             }
             await MainActor.run { onDone(nil) }
+        }
+    }
+
+    /// Image generation for the ChatGPT provider only: the OpenAI
+    /// Images API. Other providers cannot generate images from this
+    /// app, and the Balitech gateway rejects image content outright.
+    static func generateImage(prompt: String, model: String, size: String, apiKey: String,
+                              onDone: @escaping (Result<Data, String>) -> Void) -> Task<Void, Never> {
+        Task {
+            var request = URLRequest(url: URL(string: "https://api.openai.com/v1/images/generations")!)
+            request.httpMethod = "POST"
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.timeoutInterval = 120
+            let body: [String: Any] = ["model": model, "prompt": prompt, "size": size, "n": 1, "response_format": "b64_json"]
+            request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    await MainActor.run { onDone(.failure("Respons tidak dikenal dari OpenAI.")) }
+                    return
+                }
+                guard (200..<300).contains(http.statusCode) else {
+                    let snippet = String((String(data: data, encoding: .utf8) ?? "").prefix(300))
+                    await MainActor.run { onDone(.failure("Error HTTP \(http.statusCode) dari OpenAI: \(snippet)")) }
+                    return
+                }
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let items = json["data"] as? [[String: Any]],
+                      let first = items.first,
+                      let b64 = first["b64_json"] as? String,
+                      let imageData = Data(base64Encoded: b64) else {
+                    await MainActor.run { onDone(.failure("OpenAI tidak mengembalikan gambar.")) }
+                    return
+                }
+                await MainActor.run { onDone(.success(imageData)) }
+            } catch {
+                if Task.isCancelled { return }
+                await MainActor.run { onDone(.failure(error.localizedDescription)) }
+            }
         }
     }
 
@@ -1020,6 +1070,8 @@ struct AskAIView: View {
     @State private var requestTask: Task<Void, Never>?
     @State private var copiedTurnID: UUID?
     @State private var viewerImage: ViewableImage?
+    @StateObject private var transcriber = SpeechTranscriber()
+    @State private var dictationBase = ""
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
@@ -1260,6 +1312,14 @@ struct AskAIView: View {
             fieldFocused = false
             requestTask?.cancel()
             requestTask = nil
+            transcriber.stop()
+        }
+        .onChange(of: transcriber.liveText) { text in
+            guard transcriber.isRecording else { return }
+            question = dictationBase + (dictationBase.isEmpty || text.isEmpty ? "" : " ") + text
+        }
+        .onChange(of: transcriber.isRecording) { recording in
+            if !recording { dictationBase = question }
         }
         .onChange(of: provider) { newValue in
             requestTask?.cancel()
@@ -1350,6 +1410,7 @@ struct AskAIView: View {
     }
 
     private func send() {
+        transcriber.stop()
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
         let att = attachment
         guard !isLoading else { return }
@@ -1634,6 +1695,20 @@ struct AskAIView: View {
                     .font(.system(size: 20))
                     .frame(width: 38, height: 38)
                     .disabled(isLoading || provider == .meta)
+                Button {
+                    if transcriber.isRecording {
+                        transcriber.stop()
+                    } else {
+                        dictationBase = question
+                        transcriber.toggle()
+                    }
+                } label: {
+                    Image(systemName: transcriber.isRecording ? "mic.fill" : "mic")
+                        .foregroundStyle(transcriber.isRecording ? .red : .primary)
+                }
+                .font(.system(size: 20))
+                .frame(width: 38, height: 38)
+                .disabled(isLoading || provider == .meta)
                 ZStack(alignment: .topLeading) {
                     TextEditor(text: $question)
                         .focused($fieldFocused)

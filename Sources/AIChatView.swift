@@ -45,6 +45,14 @@ struct AIChatView: View {
     @State private var stashedDraft = ""
     @State private var pendingHandoff: AIChatHandoff?
     @State private var viewerImage: ViewableImage?
+    @State private var requestTask: Task<Void, Never>?
+    @StateObject private var transcriber = SpeechTranscriber()
+    @State private var dictationBase = ""
+    @State private var showingImageGen = false
+    @State private var libraryProject: AIChatProject?
+    @State private var exportingSession: AIChatSession?
+    @State private var exportShareText: String?
+    @State private var exportNotice: String?
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -118,12 +126,33 @@ struct AIChatView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 12).padding(.top, 8)
                 }
+                if transcriber.isRecording {
+                    HStack(spacing: 6) {
+                        Image(systemName: "mic.fill").foregroundStyle(.red)
+                        Text("Mendengarkan… ketuk mikrofon lagi untuk berhenti.")
+                            .font(.subheadline)
+                        Spacer()
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12).padding(.top, 8)
+                }
                 HStack(alignment: .bottom, spacing: 8) {
                     Button { pickPhoto() } label: { Image(systemName: "photo") }
                         .font(.system(size: 20))
                         .frame(width: 38, height: 38)
                         .disabled(isLoading)
                     Button { pickFile() } label: { Image(systemName: "folder") }
+                        .font(.system(size: 20))
+                        .frame(width: 38, height: 38)
+                        .disabled(isLoading)
+                    Button { toggleDictation() } label: {
+                        Image(systemName: transcriber.isRecording ? "mic.fill" : "mic")
+                            .foregroundStyle(transcriber.isRecording ? .red : .primary)
+                    }
+                    .font(.system(size: 20))
+                    .frame(width: 38, height: 38)
+                    .disabled(isLoading)
+                    Button { showingImageGen = true } label: { Image(systemName: "wand.and.stars") }
                         .font(.system(size: 20))
                         .frame(width: 38, height: 38)
                         .disabled(isLoading)
@@ -134,8 +163,12 @@ struct AIChatView: View {
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
                         .onSubmit { send() }
                     if isLoading {
-                        ProgressView()
-                            .frame(width: 38, height: 38)
+                        Button { stopRequest() } label: {
+                            Image(systemName: "stop.circle.fill")
+                                .font(.system(size: 32))
+                                .foregroundStyle(.red)
+                        }
+                        .frame(width: 38, height: 38)
                     } else {
                         Button { send() } label: {
                             Image(systemName: editingMessageID == nil ? "arrow.up.circle.fill" : "checkmark.circle.fill")
@@ -175,8 +208,42 @@ struct AIChatView: View {
             .sheet(isPresented: $showingSettings) {
                 AIChatSettingsView(provider: $provider, model: $model, endpoint: $endpoint, apiKey: $apiKey, keySaved: $keySaved)
             }
+            .sheet(isPresented: $showingImageGen) {
+                ImageGenerationView(provider: provider, apiKey: apiKey) { data, prompt in
+                    addGeneratedImage(data, prompt: prompt)
+                }
+            }
+            .sheet(item: $libraryProject) { project in
+                ProjectLibraryView(project: project, chatStore: chatStore)
+            }
+            .sheet(isPresented: Binding(get: { exportShareText != nil }, set: { if !$0 { exportShareText = nil } })) {
+                if let exportShareText {
+                    ActivityView(activityItems: [exportShareText])
+                }
+            }
+            .confirmationDialog("Ekspor chat", isPresented: Binding(get: { exportingSession != nil }, set: { if !$0 { exportingSession = nil } })) {
+                Button("Simpan ke File Saya (.md)") { exportSession(saveToFiles: true) }
+                Button("Bagikan (.md)") { exportSession(saveToFiles: false) }
+                Button("Batal", role: .cancel) { exportingSession = nil }
+            }
+            .alert("Ekspor chat", isPresented: Binding(get: { exportNotice != nil }, set: { if !$0 { exportNotice = nil } })) {
+                Button("OK", role: .cancel) { exportNotice = nil }
+            } message: {
+                Text(exportNotice ?? "")
+            }
         }
-        .onDisappear { inputFocused = false }
+        .onDisappear {
+            inputFocused = false
+            requestTask?.cancel()
+            transcriber.stop()
+        }
+        .onChange(of: transcriber.liveText) { text in
+            guard transcriber.isRecording else { return }
+            draft = dictationBase + (dictationBase.isEmpty || text.isEmpty ? "" : " ") + text
+        }
+        .onChange(of: transcriber.isRecording) { recording in
+            if !recording { dictationBase = draft }
+        }
         .onAppear {
             provider = AIProvider(rawValue: store.browserSettings.aiChatProvider) ?? .custom
             if provider == .meta { provider = .custom }
@@ -355,6 +422,17 @@ struct AIChatView: View {
             ForEach(projectChats(project)) { session in
                 chatRow(session)
             }
+            Button { libraryProject = project } label: {
+                HStack {
+                    Image(systemName: "photo.on.rectangle.angled").foregroundStyle(.secondary)
+                    Text("Pustaka").font(.subheadline)
+                    Spacer()
+                    Text("\(chatStore.libraryFiles(in: project).count)").font(.caption).foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+                .padding(.vertical, 6).padding(.horizontal, 8)
+            }
+            .buttonStyle(.plain)
         } label: {
             projectLabel(project)
         }
@@ -394,6 +472,7 @@ struct AIChatView: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button { renamingSession = session; renameText = session.title; showingRename = true } label: { Label("Ubah nama", systemImage: "pencil") }
+            Button { exportingSession = session } label: { Label("Ekspor chat", systemImage: "square.and.arrow.up") }
             Menu("Pindahkan ke proyek") {
                 Button("Tanpa proyek") { chatStore.move(session, to: nil) }
                 ForEach(chatStore.projects) { project in
@@ -508,7 +587,6 @@ struct AIChatView: View {
                             .onTapGesture {
                                 viewerImage = ViewableImage(image: uiImage, fileName: att.fileName)
                             }
-                            .fullScreenCover(item: $viewerImage) { ChatImageViewer(viewable: $0) }
                     } else {
                         HStack(spacing: 6) {
                             Image(systemName: "doc.fill")
@@ -524,6 +602,18 @@ struct AIChatView: View {
                     // Agent-mode tool calls, if any, show as a
                     // collapsible log above the answer.
                     VStack(alignment: .leading, spacing: 6) {
+                        if !message.generatedImage.isEmpty, let genImage = UIImage(data: message.generatedImage) {
+                            Image(uiImage: genImage).resizable().scaledToFit()
+                                .frame(maxWidth: 220, maxHeight: 220)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                .onTapGesture {
+                                    viewerImage = ViewableImage(image: genImage, fileName: "gambar-ai.png")
+                                }
+                            if !message.generatedPrompt.isEmpty {
+                                Text("Dibuat dari: \"\(message.generatedPrompt)\"")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
                         if !message.toolLog.isEmpty {
                             DisclosureGroup("Perkakas (\(message.toolLog.count))") {
                                 ForEach(message.toolLog.indices, id: \.self) { index in
@@ -566,6 +656,7 @@ struct AIChatView: View {
         }
         .frame(maxWidth: .infinity, alignment: message.role == "user" ? .trailing : .leading)
         .id(message.id)
+        .fullScreenCover(item: $viewerImage) { ChatImageViewer(viewable: $0) }
         .contextMenu {
             if message.role == "user" {
                 Button { beginEdit(message) } label: { Label("Ubah pesan", systemImage: "pencil") }
@@ -641,6 +732,39 @@ struct AIChatView: View {
         }
     }
 
+    private func toggleDictation() {
+        if transcriber.isRecording {
+            transcriber.stop()
+        } else {
+            dictationBase = draft
+            transcriber.toggle()
+        }
+    }
+
+    private func addGeneratedImage(_ data: Data, prompt: String) {
+        messages.append(AIChatMessage(role: "assistant", text: "", generatedImage: data, generatedPrompt: prompt))
+        persist()
+    }
+
+    private func exportSession(saveToFiles: Bool) {
+        guard let session = exportingSession else { return }
+        exportingSession = nil
+        let markdown = chatStore.exportMarkdown(for: session)
+        if saveToFiles {
+            let safe = session.title.replacingOccurrences(of: "/", with: "-")
+            let fileName = "Chat - \(safe).md"
+            let url = store.downloadsDir.appendingPathComponent(fileName)
+            do {
+                try markdown.write(to: url, atomically: true, encoding: .utf8)
+                exportNotice = "Tersimpan di File Saya/Downloads sebagai \(fileName)."
+            } catch {
+                exportNotice = "Gagal menyimpan: \(error.localizedDescription)"
+            }
+        } else {
+            exportShareText = markdown
+        }
+    }
+
     /// Agent mode only exists on the OpenAI-shape providers: the
     /// tools field is a chat/completions feature, and Gemini/Claude
     /// use different request shapes.
@@ -649,6 +773,7 @@ struct AIChatView: View {
     }
 
     private func send() {
+        transcriber.stop()
         // Confirming an edit re-sends the edited message instead of
         // appending a new one.
         if editingMessageID != nil { confirmEdit(); return }
@@ -701,6 +826,7 @@ struct AIChatView: View {
             }
         }
         let onDone: (String?) -> Void = { message in
+            requestTask = nil
             isLoading = false
             streamingID = nil
             let gotAnswer = messages.contains(where: { $0.id == id })
@@ -715,7 +841,7 @@ struct AIChatView: View {
             persist()
         }
         if agentToolsActive {
-            AIClient.askChatWithTools(
+            requestTask = AIClient.askChatWithTools(
                 provider: provider, model: model, apiKey: apiKey, endpoint: endpoint,
                 attachment: userMessage.attachment, messages: history,
                 tools: AgentTool.all, store: store,
@@ -730,12 +856,23 @@ struct AIChatView: View {
                 onDone: onDone
             )
         } else {
-            AIClient.askChat(
+            requestTask = AIClient.askChat(
                 provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: userMessage.attachment, messages: history,
                 onToken: onToken,
                 onDone: onDone
             )
         }
+    }
+
+    /// Stops the running stream (the red Stop button): cancelling the
+    /// task makes the stream end quietly with the partial answer,
+    /// the same as the Ask AI sheet's Stop. Clearing the flags here
+    /// is idempotent with the onDone the cancelled task still fires.
+    private func stopRequest() {
+        requestTask?.cancel()
+        requestTask = nil
+        isLoading = false
+        streamingID = nil
     }
 
     /// Re-sends a failed message with its original attachment. Any
@@ -947,6 +1084,169 @@ private struct AIChatSettingsView: View {
             .onChange(of: endpoint) { newValue in
                 store.browserSettings.aiCustomEndpoint = newValue
                 store.saveBrowserSettings()
+            }
+        }
+    }
+}
+
+// MARK: - Project library (Pustaka)
+
+/// The files attached anywhere inside one project's chats, as a
+/// Kimi-style library: tap an image to view it full-screen, tap any
+/// other file to share it.
+struct ProjectLibraryView: View {
+    let project: AIChatProject
+    @ObservedObject var chatStore: AIChatStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var viewerImage: ViewableImage?
+    @State private var shareURL: URL?
+
+    var body: some View {
+        NavigationStack {
+            let files = chatStore.libraryFiles(in: project)
+            Group {
+                if files.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "photo.on.rectangle.angled")
+                            .font(.largeTitle).foregroundStyle(.secondary)
+                        Text("Belum ada file di proyek ini.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        Text("Foto dan file yang dilampirkan di chat proyek ini akan muncul di sini.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding()
+                } else {
+                    List(files) { file in
+                        Button { open(file) } label: {
+                            HStack(spacing: 10) {
+                                if file.attachment.isImage, let uiImage = UIImage(data: file.attachment.data) {
+                                    Image(uiImage: uiImage)
+                                        .resizable().scaledToFill()
+                                        .frame(width: 44, height: 44).clipped().cornerRadius(8)
+                                } else {
+                                    Image(systemName: file.attachment.isPDF ? "doc.fill" : "doc")
+                                        .font(.title2).foregroundStyle(.secondary)
+                                        .frame(width: 44, height: 44)
+                                }
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(file.attachment.fileName).font(.subheadline).lineLimit(1)
+                                    Text("\(file.attachment.displaySize) · \(file.sessionTitle)")
+                                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Pustaka \(project.name)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Tutup") { dismiss() }
+                }
+            }
+            .fullScreenCover(item: $viewerImage) { ChatImageViewer(viewable: $0) }
+            .sheet(isPresented: Binding(get: { shareURL != nil }, set: { if !$0 { shareURL = nil } })) {
+                if let shareURL {
+                    ActivityView(activityItems: [shareURL])
+                }
+            }
+        }
+    }
+
+    private func open(_ file: LibraryFile) {
+        if file.attachment.isImage, let uiImage = UIImage(data: file.attachment.data) {
+            viewerImage = ViewableImage(image: uiImage, fileName: file.attachment.fileName)
+        } else {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(file.attachment.fileName)
+            if (try? file.attachment.data.write(to: url)) != nil {
+                shareURL = url
+            }
+        }
+    }
+}
+
+// MARK: - Image generation (ChatGPT provider only)
+
+struct ImageGenerationView: View {
+    let provider: AIProvider
+    let apiKey: String
+    var onImage: (Data, String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var prompt = ""
+    @State private var model = AIProvider.chatgptImageModels.first?.id ?? ""
+    @State private var size = "1024x1024"
+    @State private var isGenerating = false
+    @State private var errorText: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Prompt") {
+                    TextField("Gambar apa yang mau dibuat…", text: $prompt, axis: .vertical)
+                        .lineLimit(3...6)
+                }
+                Section("Model") {
+                    Picker("Model", selection: $model) {
+                        ForEach(AIProvider.chatgptImageModels, id: \.id) { model in
+                            Text(model.name).tag(model.id)
+                        }
+                    }
+                }
+                Section("Ukuran") {
+                    Picker("Ukuran", selection: $size) {
+                        Text("1024 × 1024").tag("1024x1024")
+                        Text("1536 × 1024").tag("1536x1024")
+                        Text("1024 × 1536").tag("1024x1536")
+                    }
+                    .pickerStyle(.segmented)
+                }
+                if provider != .chatgpt {
+                    Section {
+                        Text("Buat gambar hanya didukung provider ChatGPT dengan kunci OpenAI langsung. Provider \(provider.displayName) tidak bisa membuat gambar dari app ini.")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                if let errorText {
+                    Section {
+                        Text(errorText).font(.subheadline).foregroundStyle(.red)
+                    }
+                }
+                Section {
+                    Button(isGenerating ? "Membuat…" : "Buat gambar") { generate() }
+                        .disabled(prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isGenerating || provider != .chatgpt || apiKey.isEmpty)
+                }
+                if provider == .chatgpt, apiKey.isEmpty {
+                    Section {
+                        Text("Isi API key ChatGPT dulu di Pengaturan AI (ikon gir di pojok kanan atas tab AI).")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Buat gambar")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Batal") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private func generate() {
+        let value = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        isGenerating = true
+        errorText = nil
+        _ = AIClient.generateImage(prompt: value, model: model, size: size, apiKey: apiKey) { result in
+            isGenerating = false
+            switch result {
+            case .success(let data):
+                onImage(data, value)
+                dismiss()
+            case .failure(let message):
+                errorText = message
             }
         }
     }

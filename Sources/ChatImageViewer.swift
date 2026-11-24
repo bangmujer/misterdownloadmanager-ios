@@ -129,8 +129,9 @@ struct ChatImageViewer: View {
     }
 }
 
-/// UIKit share sheet for the viewer.
-private struct ActivityView: UIViewControllerRepresentable {
+/// UIKit share sheet, shared by the image viewer, the project
+/// library, and the chat export.
+struct ActivityView: UIViewControllerRepresentable {
     let activityItems: [Any]
 
     func makeUIViewController(context: Context) -> UIActivityViewController {

@@ -94,6 +94,31 @@ struct AgentTool {
             description: "Info aplikasi: versi, jumlah download per status, jumlah file, dan jumlah tab browser.",
             parameters: object([:])
         ),
+        AgentTool(
+            name: "close_tab",
+            description: "Tutup satu tab browser. Tab terakhir tidak ditutup, tapi dikembalikan ke halaman awal.",
+            parameters: object(["id": string("Nomor urut, awalan id, atau kata kunci judul dari list_tabs.")], required: ["id"])
+        ),
+        AgentTool(
+            name: "switch_tab",
+            description: "Pindah ke tab browser lain dan jadikan tab aktif.",
+            parameters: object(["id": string("Nomor urut, awalan id, atau kata kunci judul dari list_tabs.")], required: ["id"])
+        ),
+        AgentTool(
+            name: "search_downloads",
+            description: "Cari download berdasarkan nama file (tidak peduli huruf besar/kecil).",
+            parameters: object(["query": string("Kata kunci nama file; kosong untuk semua download.")], required: ["query"])
+        ),
+        AgentTool(
+            name: "list_bookmarks",
+            description: "Lihat bookmark browser yang tersimpan beserta URL-nya.",
+            parameters: object([:])
+        ),
+        AgentTool(
+            name: "list_history",
+            description: "Lihat 30 entri riwayat browser terbaru beserta judul dan URL-nya.",
+            parameters: object([:])
+        ),
     ]
 }
 
@@ -122,6 +147,16 @@ enum AgentToolRunner {
             return await fetchURL(arguments["url"] as? String ?? "")
         case "app_info":
             return await appInfo(store: store)
+        case "close_tab":
+            return await closeTab(id: arguments["id"] as? String ?? "", store: store)
+        case "switch_tab":
+            return await switchTab(id: arguments["id"] as? String ?? "", store: store)
+        case "search_downloads":
+            return await searchDownloads(query: arguments["query"] as? String ?? "", store: store)
+        case "list_bookmarks":
+            return await listBookmarks(store: store)
+        case "list_history":
+            return await listHistory(store: store)
         default:
             return "Perkakas tidak dikenal: \(name)."
         }
@@ -197,6 +232,45 @@ enum AgentToolRunner {
         } catch {
             return "Gagal menulis \(path): \(error.localizedDescription)"
         }
+    }
+
+    // MARK: - Tab management (agent tools)
+
+    /// One tab by 1-based number (as list_tabs shows), UUID prefix,
+    /// or a word in its title.
+    private static func findTab(id: String, in tabs: [BrowserTabState]) -> BrowserTabState? {
+        let needle = id.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let n = Int(needle), (1...tabs.count).contains(n) { return tabs[n - 1] }
+        let lower = needle.lowercased()
+        return tabs.first { $0.id.uuidString.lowercased().hasPrefix(lower) }
+            ?? tabs.first { $0.displayTitle.lowercased().contains(lower) }
+    }
+
+    @MainActor
+    private static func closeTab(id: String, store: DownloadStore) -> String {
+        guard let session = store.browserSession else {
+            return "Browser tidak sedang aktif."
+        }
+        guard let tab = findTab(id: id, in: session.tabs) else {
+            return "Tab tidak ditemukan: \(id). Lihat dulu list_tabs."
+        }
+        let title = tab.displayTitle.isEmpty ? (tab.urlString.isEmpty ? "tab baru" : tab.urlString) : tab.displayTitle
+        session.closeTab(tab.id)
+        return "Tab ditutup: \(title)."
+    }
+
+    @MainActor
+    private static func switchTab(id: String, store: DownloadStore) -> String {
+        guard let session = store.browserSession else {
+            return "Browser tidak sedang aktif."
+        }
+        guard let tab = findTab(id: id, in: session.tabs) else {
+            return "Tab tidak ditemukan: \(id). Lihat dulu list_tabs."
+        }
+        session.select(tab.id)
+        let index = (session.tabs.firstIndex { $0.id == tab.id } ?? 0) + 1
+        let title = tab.displayTitle.isEmpty ? (tab.urlString.isEmpty ? "tab baru" : tab.urlString) : tab.displayTitle
+        return "Pindah ke tab \(index): \(title)."
     }
 
     // MARK: - Downloads
@@ -347,6 +421,37 @@ enum AgentToolRunner {
         let files = (try? FileManager.default.contentsOfDirectory(at: store.downloadsDir, includingPropertiesForKeys: nil))?.count ?? 0
         let tabs = store.browserSession?.tabs.count ?? 0
         return "MDM iOS v\(version). Download: \(store.items.count) total (\(states.isEmpty ? "belum ada" : states)). File di folder Downloads: \(files). Tab browser terbuka: \(tabs)."
+    }
+
+    @MainActor
+    private static func searchDownloads(query: String, store: DownloadStore) -> String {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let matches = store.items.filter { needle.isEmpty || $0.fileName.lowercased().contains(needle) }
+        guard !matches.isEmpty else {
+            return "Tidak ada download yang cocok dengan \"\(query)\"."
+        }
+        return matches.enumerated().prefix(20).map { index, item in
+            let total = item.totalBytes.map(formatBytes) ?? "?"
+            return "\(index + 1). [\(String(item.id.uuidString.prefix(8)))] \(item.fileName) — \(item.state), \(Int(item.progress * 100))%, \(formatBytes(item.downloadedBytes))/\(total) — \(item.url)"
+        }.joined(separator: "\n")
+    }
+
+    @MainActor
+    private static func listBookmarks(store: DownloadStore) -> String {
+        let marks = store.browserSettings.bookmarks
+        guard !marks.isEmpty else { return "Belum ada bookmark." }
+        return marks.enumerated().map { index, mark in
+            "\(index + 1). \(mark.title) — \(mark.urlString)"
+        }.joined(separator: "\n")
+    }
+
+    @MainActor
+    private static func listHistory(store: DownloadStore) -> String {
+        let entries = Array(store.browserHistory.prefix(30))
+        guard !entries.isEmpty else { return "Riwayat browser kosong." }
+        return entries.map { entry in
+            "\(entry.title.isEmpty ? entry.urlString : entry.title) — \(entry.urlString)"
+        }.joined(separator: "\n")
     }
 
     private static func formatBytes(_ n: Int64) -> String {
