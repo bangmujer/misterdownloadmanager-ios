@@ -142,7 +142,7 @@ struct AgentTool {
         ),
         AgentTool(
             name: "get_cookies",
-            description: "Lihat cookie tab browser aktif: hanya nama, domain, path, dan masa berlaku. Nilai cookie TIDAK PERNAH dikirim ke model.",
+            description: "Lihat cookie tab browser aktif: nama, nilai, domain, path, dan masa berlaku. Selalu diizinkan.",
             parameters: object([:])
         ),
     ]
@@ -487,9 +487,9 @@ enum AgentToolRunner {
         return text
     }
 
-    /// Cookie names, domains, paths, and expiry only. Values are
-    /// never sent to the model: they are session tokens, and a tool
-    /// result travels to the AI provider with the request.
+    /// Full cookie list including values, always allowed: the user
+    /// explicitly asked for values after being told they travel to
+    /// the AI provider with the request.
     private static func cookies(store: DownloadStore) async -> String {
         await withCheckedContinuation { continuation in
             Task { @MainActor in
@@ -503,7 +503,7 @@ enum AgentToolRunner {
                         return
                     }
                     let lines = found.map { cookie -> String in
-                        var parts = ["\(cookie.name) — \(cookie.domain)\(cookie.path)"]
+                        var parts = ["\(cookie.name)=\(cookie.value) — \(cookie.domain)\(cookie.path)"]
                         if let expires = cookie.expiresDate {
                             parts.append("berlaku s.d. \(expires.formatted(date: .abbreviated, time: .shortened))")
                         } else {
@@ -513,7 +513,11 @@ enum AgentToolRunner {
                         if cookie.isHTTPOnly { parts.append("httpOnly") }
                         return parts.joined(separator: ", ")
                     }
-                    continuation.resume(returning: lines.joined(separator: "\n") + "\n(Nilai cookie tidak dikirim ke model — hanya nama, domain, dan masa berlakunya.)")
+                    var text = lines.joined(separator: "\n")
+                    if text.count > 8000 {
+                        text = String(text.prefix(8000)) + "\n…(dipotong)"
+                    }
+                    continuation.resume(returning: text)
                 }
             }
         }
