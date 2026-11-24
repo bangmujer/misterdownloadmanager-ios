@@ -267,7 +267,7 @@ enum AIClient {
     }
 
     private static func makeChatRequest(provider: AIProvider, model: String, apiKey: String, endpoint: String, attachment: AIAttachment?, messages: [(role: String, text: String)]) -> URLRequest? {
-        let system = "Kamu adalah asisten AI di dalam aplikasi Mister Download Manager. Jawablah dalam bahasa yang sama dengan pesan pengguna, ringkas tapi lengkap."
+        let system = "Kamu adalah asisten AI serba bisa. Jawablah pertanyaan apa pun tentang topik apa pun, tanpa batasan topik — tidak terbatas pada aplikasi ini. Jawablah dalam bahasa yang sama dengan pesan pengguna, ringkas tapi lengkap."
         let recent = Array(messages.suffix(20))
         let media = attachment.flatMap { $0.isImage || $0.isPDF ? $0 : nil }
         let lastText = textWithAttachmentNote(recent.last?.text ?? "", attachment: attachment, mediaAttached: media != nil)
