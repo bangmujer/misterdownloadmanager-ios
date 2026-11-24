@@ -566,6 +566,11 @@ struct AIChatView: View {
 
     private func loadModelAndKey() {
         model = store.browserSettings.aiModels[provider.rawValue] ?? provider.defaultModel
+        // The catalog slug carries the bt/ prefix; an older stored
+        // bare name for the same model is normalized to it once.
+        if provider == .balitech, model == "deepseek-v4.1-flash" {
+            model = "bt/deepseek-v4.1-flash"
+        }
         endpoint = store.browserSettings.aiCustomEndpoint
         let saved = KeychainHelper.load(account: provider.rawValue) ?? ""
         apiKey = saved
@@ -752,8 +757,22 @@ private struct AIChatSettingsView: View {
                         Text("URL dasar endpoint-nya — boleh juga ditempel lengkap sampai /chat/completions. Permintaan dikirim persis seperti contoh curl kemarin: POST, header Authorization Bearer, body model + messages.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    TextField("Model", text: $model)
-                        .autocapitalization(.none).autocorrectionDisabled()
+                    if provider == .balitech {
+                        Picker("Model", selection: AIProvider.balitechModelPickerBinding(model: $model)) {
+                            ForEach(AIProvider.balitechModels, id: \.id) { m in
+                                Text(m.name).tag(m.id)
+                            }
+                            Text("Kustom…").tag(AIProvider.balitechCustomTag)
+                        }
+                        if !AIProvider.isBalitechCatalogModel(model) {
+                            TextField("Model", text: $model)
+                                .autocapitalization(.none).autocorrectionDisabled()
+                        }
+                        Text(model).font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        TextField("Model", text: $model)
+                            .autocapitalization(.none).autocorrectionDisabled()
+                    }
                 }
                 Section("API key") {
                     SecureField("API key \(provider.displayName)", text: $apiKey)
@@ -791,6 +810,9 @@ private struct AIChatSettingsView: View {
                 store.browserSettings.aiChatProvider = newValue.rawValue
                 store.saveBrowserSettings()
                 model = store.browserSettings.aiModels[newValue.rawValue] ?? newValue.defaultModel
+                if newValue == .balitech, model == "deepseek-v4.1-flash" {
+                    model = "bt/deepseek-v4.1-flash"
+                }
                 endpoint = store.browserSettings.aiCustomEndpoint
                 let saved = KeychainHelper.load(account: newValue.rawValue) ?? ""
                 apiKey = saved

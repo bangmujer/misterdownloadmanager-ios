@@ -29,6 +29,67 @@ enum AIProvider: String, CaseIterable, Identifiable {
     /// endpoint is not user-editable.
     static let balitechBaseURL = "https://balitechsolution.com/v3"
 
+    /// One entry of the Balitech catalog (verified 2026-11-24 at
+    /// https://balitechsolution.com/katalog-model/: 30 active models).
+    /// The site states no per-model capability labels, so every entry
+    /// is offered as a chat/completions model with no embeddings,
+    /// vision, or image claims.
+    struct BalitechModel: Hashable {
+        let id: String
+        let name: String
+    }
+
+    static let balitechModels: [BalitechModel] = [
+        BalitechModel(id: "bt/deepseek-v4-flash", name: "DeepSeek V4 Flash"),
+        BalitechModel(id: "bt/deepseek-v4-pro", name: "DeepSeek V4 Pro"),
+        BalitechModel(id: "bt/deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash"),
+        BalitechModel(id: "bt/ernie-5.5-flash-preview", name: "ERNIE 5.5 Flash Preview"),
+        BalitechModel(id: "bt/exaone-v2.5", name: "EXAONE v2.5"),
+        BalitechModel(id: "bt/gemini-3.8-flash", name: "Gemini 3.8 Flash"),
+        BalitechModel(id: "bt/glm-5.3-flash", name: "GLM-5.3 Flash"),
+        BalitechModel(id: "bt/gpt-5.6-luna", name: "GPT 5.6 Luna"),
+        BalitechModel(id: "bt/gpt-5.6-sol", name: "GPT 5.6 Sol"),
+        BalitechModel(id: "bt/gpt-5.6-terra", name: "GPT 5.6 Terra"),
+        BalitechModel(id: "bt/gpt-6-astra", name: "GPT 6 Astra"),
+        BalitechModel(id: "bt/gpt-6-luna", name: "GPT 6 Luna"),
+        BalitechModel(id: "bt/gpt-6-sol", name: "GPT 6 Sol"),
+        BalitechModel(id: "bt/grok-4.7", name: "Grok 4.7"),
+        BalitechModel(id: "bt/hy4-flash", name: "Hunyuan 4 Flash"),
+        BalitechModel(id: "bt/kimi-k2.5", name: "Kimi K2.5"),
+        BalitechModel(id: "bt/kimi-k3", name: "Kimi K3"),
+        BalitechModel(id: "bt/ling-3.2-flash", name: "Ling 3.2 Flash"),
+        BalitechModel(id: "bt/longcat-2.5", name: "LongCat 2.5"),
+        BalitechModel(id: "bt/mercury-3", name: "Mercury 3"),
+        BalitechModel(id: "bt/minimax-m3", name: "Minimax M3"),
+        BalitechModel(id: "bt/minimax-m3.1-flash", name: "MiniMax M3.1 Flash"),
+        BalitechModel(id: "bt/nemotron-3.5-super-vl", name: "Nemotron 3.5 Super VL"),
+        BalitechModel(id: "bt/nex-n2.6", name: "Nex N2.6"),
+        BalitechModel(id: "bt/qwen3.8-flash", name: "Qwen 3.8 Flash"),
+        BalitechModel(id: "bt/qwen3.8-max", name: "Qwen 3.8 Max"),
+        BalitechModel(id: "bt/qwen-4-max", name: "Qwen 4 Max"),
+        BalitechModel(id: "bt/qwen3.8-27b", name: "Qwen3.8 27B"),
+        BalitechModel(id: "bt/sensenova-6.8-flash", name: "SenseNova 6.8 Flash"),
+        BalitechModel(id: "bt/step-5-preview", name: "Step 5 Preview"),
+    ]
+
+    /// Picker tag for the "type it yourself" row. Never stored as a
+    /// model: when the stored model is not a catalog slug, the picker
+    /// shows this row and the text field stays visible.
+    static let balitechCustomTag = "__kustom__"
+
+    static func isBalitechCatalogModel(_ id: String) -> Bool {
+        balitechModels.contains(where: { $0.id == id })
+    }
+
+    /// Picker selection for the Balitech model dropdown: a catalog
+    /// slug selects its row, anything else selects "Kustom…".
+    static func balitechModelPickerBinding(model: Binding<String>) -> Binding<String> {
+        Binding(
+            get: { isBalitechCatalogModel(model.wrappedValue) ? model.wrappedValue : balitechCustomTag },
+            set: { if $0 != balitechCustomTag { model.wrappedValue = $0 } }
+        )
+    }
+
     var id: String { rawValue }
     var displayName: String { rawValue }
 
@@ -39,7 +100,7 @@ enum AIProvider: String, CaseIterable, Identifiable {
         case .gemini: return "gemini-2.0-flash"
         case .chatgpt: return "gpt-4o-mini"
         case .claude: return "claude-3-5-haiku-20241022"
-        case .balitech: return "deepseek-v4.1-flash"
+        case .balitech: return "bt/deepseek-v4.1-flash"
         case .custom: return "deepseek-v4.1-flash"
         case .meta: return ""
         }
@@ -685,11 +746,31 @@ struct AskAIView: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             Text("Model").font(.headline)
-                            TextField("Model", text: $model)
-                                .focused($fieldFocused)
-                                .autocapitalization(.none).autocorrectionDisabled()
+                            if provider == .balitech {
+                                Picker("Model", selection: AIProvider.balitechModelPickerBinding(model: $model)) {
+                                    ForEach(AIProvider.balitechModels, id: \.id) { m in
+                                        Text(m.name).tag(m.id)
+                                    }
+                                    Text("Kustom…").tag(AIProvider.balitechCustomTag)
+                                }
+                                .pickerStyle(.menu)
                                 .padding(.horizontal, 12).padding(.vertical, 10)
                                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                if !AIProvider.isBalitechCatalogModel(model) {
+                                    TextField("Model", text: $model)
+                                        .focused($fieldFocused)
+                                        .autocapitalization(.none).autocorrectionDisabled()
+                                        .padding(.horizontal, 12).padding(.vertical, 10)
+                                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                }
+                                Text(model).font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                TextField("Model", text: $model)
+                                    .focused($fieldFocused)
+                                    .autocapitalization(.none).autocorrectionDisabled()
+                                    .padding(.horizontal, 12).padding(.vertical, 10)
+                                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                            }
                             Text("API key").font(.headline)
                             SecureField("API key \(provider.displayName)", text: $apiKey)
                                 .focused($fieldFocused)
@@ -839,6 +920,11 @@ struct AskAIView: View {
 
     private func loadModelAndKey() {
         model = store.browserSettings.aiModels[provider.rawValue] ?? provider.defaultModel
+        // The catalog slug carries the bt/ prefix; an older stored
+        // bare name for the same model is normalized to it once.
+        if provider == .balitech, model == "deepseek-v4.1-flash" {
+            model = "bt/deepseek-v4.1-flash"
+        }
         endpoint = store.browserSettings.aiCustomEndpoint
         let saved = KeychainHelper.load(account: provider.rawValue) ?? ""
         apiKey = saved
