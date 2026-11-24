@@ -45,6 +45,13 @@ struct AIChatView: View {
     /// message field never slides underneath the bar.
     let bottomBarHeight: CGFloat = 0
 
+    // Explicit init: a struct whose stored properties all have default
+    // values only gets a synthesized init() with no arguments, so the
+    // call site's bottomBarHeight: argument needs this.
+    init(bottomBarHeight: CGFloat = 0) {
+        self.bottomBarHeight = bottomBarHeight
+    }
+
     var body: some View {
         NavigationStack {
             GeometryReader { geo in

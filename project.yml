@@ -79,7 +79,7 @@ targets:
       base:
         PRODUCT_NAME: "Mister Download Manager"
         PRODUCT_BUNDLE_IDENTIFIER: com.bangmujer.misterdownloadmanager
-        MARKETING_VERSION: "0.6.60"
+        MARKETING_VERSION: "0.6.61"
         # libsqlite3 is needed for `import SQLite3` (WQFiles-style SQLite viewer).
         OTHER_LDFLAGS: "$(inherited) -lsqlite3"
         CURRENT_PROJECT_VERSION: "1"
