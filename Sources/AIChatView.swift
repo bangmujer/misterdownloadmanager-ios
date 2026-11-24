@@ -321,7 +321,6 @@ struct AIChatView: View {
                     Image(systemName: "xmark")
                 }
                 .buttonStyle(.bordered)
-                .buttonBorderShape(.circle)
             }
             .padding(12)
         }
