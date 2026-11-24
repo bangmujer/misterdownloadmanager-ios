@@ -43,7 +43,9 @@ struct AIChatView: View {
     /// The chat column pads itself above the bar by the part of that
     /// height the propagated safe area does not already cover, so the
     /// message field never slides underneath the bar.
-    let bottomBarHeight: CGFloat = 0
+    /// No default value here: a `let` with a default cannot be assigned
+    /// again inside init (the 0.6.61 failure).
+    let bottomBarHeight: CGFloat
 
     // Explicit init: a struct whose stored properties all have default
     // values only gets a synthesized init() with no arguments, so the
