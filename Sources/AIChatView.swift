@@ -41,6 +41,9 @@ struct AIChatView: View {
     @State private var showingSettings = false
     @State private var attachment: AIAttachment?
     @State private var attachmentPicker = AIAttachmentPicker()
+    @State private var failedIDs: Set<UUID> = []
+    @State private var editingMessageID: UUID?
+    @State private var stashedDraft = ""
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -103,6 +106,16 @@ struct AIChatView: View {
                     }
                     .padding(.horizontal, 12).padding(.top, 8)
                 }
+                if editingMessageID != nil {
+                    HStack(spacing: 6) {
+                        Image(systemName: "pencil")
+                        Text("Mengubah pesan").font(.subheadline)
+                        Spacer()
+                        Button("Batal") { cancelEdit() }
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 12).padding(.top, 8)
+                }
                 HStack(alignment: .bottom, spacing: 8) {
                     Button { pickPhoto() } label: { Image(systemName: "photo") }
                         .font(.system(size: 20))
@@ -123,7 +136,7 @@ struct AIChatView: View {
                             .frame(width: 38, height: 38)
                     } else {
                         Button { send() } label: {
-                            Image(systemName: "arrow.up.circle.fill")
+                            Image(systemName: editingMessageID == nil ? "arrow.up.circle.fill" : "checkmark.circle.fill")
                                 .font(.system(size: 32))
                         }
                         .disabled(!canSend)
@@ -140,7 +153,7 @@ struct AIChatView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button { messages = []; errorText = nil } label: {
+                    Button { messages = []; errorText = nil; failedIDs = []; editingMessageID = nil; draft = ""; attachment = nil } label: {
                         Label("Chat baru", systemImage: "square.and.pencil")
                     }
                     .disabled(messages.isEmpty || isLoading)
@@ -197,8 +210,9 @@ struct AIChatView: View {
     }
 
     private func bubble(_ message: AIChatMessage) -> some View {
-        HStack {
-            if message.role == "user" { Spacer(minLength: 48) }
+        VStack(alignment: message.role == "user" ? .trailing : .leading, spacing: 4) {
+            HStack {
+                if message.role == "user" { Spacer(minLength: 48) }
             VStack(alignment: message.role == "user" ? .trailing : .leading, spacing: 6) {
                 if let att = message.attachment {
                     if att.isImage, let uiImage = UIImage(data: att.data) {
@@ -225,10 +239,27 @@ struct AIChatView: View {
                     )
                     .foregroundStyle(message.role == "user" ? .white : .primary)
             }
-            if message.role == "assistant" { Spacer(minLength: 48) }
+                if message.role == "assistant" { Spacer(minLength: 48) }
+            }
+            if message.role == "user", failedIDs.contains(message.id) {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                    Text("Tidak terkirim.").foregroundStyle(.secondary)
+                    Button("Kirim ulang") { retry(message) }
+                        .disabled(isLoading)
+                }
+                .font(.caption)
+            }
         }
         .frame(maxWidth: .infinity, alignment: message.role == "user" ? .trailing : .leading)
         .id(message.id)
+        .contextMenu {
+            if message.role == "user" {
+                Button { beginEdit(message) } label: { Label("Ubah pesan", systemImage: "pencil") }
+                    .disabled(isLoading)
+                Button { UIPasteboard.general.string = message.text } label: { Label("Salin", systemImage: "doc.on.doc") }
+            }
+        }
     }
 
     private var missingEndpoint: Bool {
@@ -236,8 +267,11 @@ struct AIChatView: View {
     }
 
     private var canSend: Bool {
-        (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || attachment != nil)
-            && !isLoading && !apiKey.isEmpty && !model.isEmpty && !missingEndpoint
+        let textPresent = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // While editing, only the edited text counts — a staged
+        // attachment belongs to the next fresh message, not the edit.
+        let contentOK = editingMessageID != nil ? textPresent : (textPresent || attachment != nil)
+        return contentOK && !isLoading && !apiKey.isEmpty && !model.isEmpty && !missingEndpoint
     }
 
     private func loadModelAndKey() {
@@ -275,6 +309,9 @@ struct AIChatView: View {
     }
 
     private func send() {
+        // Confirming an edit re-sends the edited message instead of
+        // appending a new one.
+        if editingMessageID != nil { confirmEdit(); return }
         let q = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let att = attachment
         guard !isLoading, !q.isEmpty || att != nil else { return }
@@ -294,17 +331,30 @@ struct AIChatView: View {
         draft = ""
         attachment = nil
         errorText = nil
-        messages.append(AIChatMessage(role: "user", text: userText, attachment: att))
+        let userMessage = AIChatMessage(role: "user", text: userText, attachment: att)
+        messages.append(userMessage)
+        startRequest(for: userMessage)
+    }
+
+    /// Sends (or re-sends) one user message: builds the history up to
+    /// it — older attachments ride only as name notes — and streams the
+    /// answer. A failed attempt marks the message so its bubble can
+    /// offer "Kirim ulang".
+    private func startRequest(for userMessage: AIChatMessage) {
+        guard let idx = messages.firstIndex(where: { $0.id == userMessage.id }) else { return }
+        failedIDs.remove(userMessage.id)
         let id = UUID()
         streamingID = id
         isLoading = true
+        errorText = nil
         // Older attached messages keep only a name note in the history;
         // the fresh attachment rides as a media part on the newest message.
-        let history: [(role: String, text: String)] = messages.dropLast().map { m -> (role: String, text: String) in
+        let prefix = messages[...idx]
+        let history: [(role: String, text: String)] = prefix.dropLast().map { m -> (role: String, text: String) in
             (role: m.role, text: m.text + (m.attachment.map { " [Lampiran: \($0.fileName)]" } ?? ""))
-        } + [(role: "user", text: userText)]
+        } + [(role: "user", text: userMessage.text)]
         AIClient.askChat(
-            provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: att, messages: history,
+            provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: userMessage.attachment, messages: history,
             onToken: { token in
                 if let idx = messages.firstIndex(where: { $0.id == id }) {
                     messages[idx].text += token
@@ -315,13 +365,63 @@ struct AIChatView: View {
             onDone: { message in
                 isLoading = false
                 streamingID = nil
+                let gotAnswer = messages.contains(where: { $0.id == id })
                 if let message {
                     errorText = message
-                } else if messages.first(where: { $0.id == id }) == nil {
+                } else if !gotAnswer {
                     errorText = "Tidak ada jawaban dari \(provider.displayName). Coba cek model dan kunci API-nya."
+                }
+                if message != nil || !gotAnswer {
+                    failedIDs.insert(userMessage.id)
                 }
             }
         )
+    }
+
+    /// Re-sends a failed message with its original attachment. Any
+    /// replies after it (including a partial answer) are dropped and
+    /// regenerated.
+    private func retry(_ message: AIChatMessage) {
+        guard !isLoading,
+              let idx = messages.firstIndex(where: { $0.id == message.id }) else { return }
+        let droppedIDs = messages[(idx + 1)...].map(\.id)
+        failedIDs.subtract(droppedIDs)
+        messages = Array(messages[...idx])
+        startRequest(for: messages[idx])
+    }
+
+    private func beginEdit(_ message: AIChatMessage) {
+        guard !isLoading else { return }
+        stashedDraft = draft
+        draft = message.text
+        editingMessageID = message.id
+        inputFocused = true
+    }
+
+    private func cancelEdit() {
+        draft = stashedDraft
+        stashedDraft = ""
+        editingMessageID = nil
+    }
+
+    /// Applies the edited text, drops everything after the message
+    /// (its old answer included), and re-sends it with the original
+    /// attachment.
+    private func confirmEdit() {
+        guard let editID = editingMessageID,
+              let idx = messages.firstIndex(where: { $0.id == editID }),
+              !isLoading else { return }
+        let q = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        let droppedIDs = messages[(idx + 1)...].map(\.id)
+        failedIDs.subtract(droppedIDs)
+        messages[idx].text = q
+        messages = Array(messages[...idx])
+        draft = ""
+        attachment = nil
+        stashedDraft = ""
+        editingMessageID = nil
+        startRequest(for: messages[idx])
     }
 }
 
