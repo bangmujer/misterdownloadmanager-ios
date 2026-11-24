@@ -1363,7 +1363,7 @@ struct ToolLogCard: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "wrench.and.screwdriver")
-                    .foregroundStyle(.accent)
+                    .foregroundStyle(Color.accentColor)
                 Text("Perkakas")
                     .font(.subheadline).bold()
                 Text("\(log.count)")
