@@ -1081,19 +1081,28 @@ struct AskAIView: View {
             ScrollViewReader { proxy in
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if !pageTitle.isEmpty || !pageURL.isEmpty {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(pageTitle.isEmpty ? "Halaman ini" : pageTitle)
-                                .font(.headline).lineLimit(2)
-                            Text(pageURL).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                            Text(pageText.isEmpty ? "Teks halaman tidak terbaca." : "Konteks halaman terbaca (\(pageText.count) karakter).")
-                                .font(.caption).foregroundStyle(.secondary)
+                    // Tapping outside the field hides the keyboard.
+                    // Scoped to the non-editable sections: a blanket
+                    // gesture would also fire when tapping the config
+                    // text fields and unfocus them instantly.
+                    // simultaneousGesture (like the AI tab) keeps
+                    // double-tap text selection working.
+                    VStack(alignment: .leading, spacing: 16) {
+                        if !pageTitle.isEmpty || !pageURL.isEmpty {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(pageTitle.isEmpty ? "Halaman ini" : pageTitle)
+                                    .font(.headline).lineLimit(2)
+                                Text(pageURL).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                Text(pageText.isEmpty ? "Teks halaman tidak terbaca." : "Konteks halaman terbaca (\(pageText.count) karakter).")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                         }
-                    }
 
-                    Toggle("Sertakan konteks halaman ini", isOn: $includePageContext)
-                        .font(.subheadline)
-                        .disabled(isLoading)
+                        Toggle("Sertakan konteks halaman ini", isOn: $includePageContext)
+                            .font(.subheadline)
+                            .disabled(isLoading)
+                    }
+                    .simultaneousGesture(TapGesture().onEnded { fieldFocused = false })
 
                     DisclosureGroup(isExpanded: $showConfig) {
                         VStack(alignment: .leading, spacing: 8) {
@@ -1241,45 +1250,48 @@ struct AskAIView: View {
                         }
                     }
 
-                    ForEach(turns) { turn in
-                        turnView(turn)
-                    }
-
-                    if turns.isEmpty, !isLoading {
-                        HStack(spacing: 8) {
-                            quickAction("Ringkas halaman ini")
-                            quickAction("Jelaskan sederhana")
+                    VStack(alignment: .leading, spacing: 16) {
+                        ForEach(turns) { turn in
+                            turnView(turn)
                         }
-                        HStack(spacing: 8) {
-                            quickAction("Apa isi halaman ini?")
-                        }
-                    }
 
-                    if let last = turns.last, !last.answer.isEmpty, !isLoading {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Pertanyaan lanjutan").font(.subheadline).foregroundStyle(.secondary)
+                        if turns.isEmpty, !isLoading {
                             HStack(spacing: 8) {
-                                quickAction("Jelaskan lebih sederhana")
-                                quickAction("Beri contoh")
+                                quickAction("Ringkas halaman ini")
+                                quickAction("Jelaskan sederhana")
                             }
                             HStack(spacing: 8) {
-                                quickAction("Apa lagi yang penting dari halaman ini?")
+                                quickAction("Apa isi halaman ini?")
                             }
                         }
-                    }
 
-                    if !turns.isEmpty, !isLoading {
-                        Button { handOffToAITab() } label: {
-                            Label("Lanjut di tab AI", systemImage: "sparkles")
-                                .frame(maxWidth: .infinity).padding(.vertical, 10)
-                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+                        if let last = turns.last, !last.answer.isEmpty, !isLoading {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Pertanyaan lanjutan").font(.subheadline).foregroundStyle(.secondary)
+                                HStack(spacing: 8) {
+                                    quickAction("Jelaskan lebih sederhana")
+                                    quickAction("Beri contoh")
+                                }
+                                HStack(spacing: 8) {
+                                    quickAction("Apa lagi yang penting dari halaman ini?")
+                                }
+                            }
                         }
-                        .font(.subheadline)
-                    }
 
-                    if let errorText {
-                        Text(errorText).font(.subheadline).foregroundStyle(.red)
+                        if !turns.isEmpty, !isLoading {
+                            Button { handOffToAITab() } label: {
+                                Label("Lanjut di tab AI", systemImage: "sparkles")
+                                    .frame(maxWidth: .infinity).padding(.vertical, 10)
+                                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+                            }
+                            .font(.subheadline)
+                        }
+
+                        if let errorText {
+                            Text(errorText).font(.subheadline).foregroundStyle(.red)
+                        }
                     }
+                    .simultaneousGesture(TapGesture().onEnded { fieldFocused = false })
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(16)
