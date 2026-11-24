@@ -7,19 +7,6 @@ enum AppTab: Hashable {
     case downloads, browser, ai, files, settings
 }
 
-/// iOS 26 liquid glass background, with the old frosted material as the
-/// fallback on earlier systems.
-private struct LiquidGlassBackground<S: Shape>: ViewModifier {
-    var shape: S
-    func body(content: Content) -> some View {
-        if #available(iOS 26, *) {
-            content.glassEffect(.regular, in: shape)
-        } else {
-            content.background(.ultraThinMaterial, in: shape)
-        }
-    }
-}
-
 struct ContentView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.mdmScale) var scale
@@ -31,11 +18,14 @@ struct ContentView: View {
     @State private var confirmDelete: DownloadItem?
 
     var body: some View {
-        // No TabView: on iOS 26 the system tab bar's empty glass
-        // capsule keeps drawing behind our custom bar even with its
-        // toolbar hidden, so tabs are switched manually here and every
-        // root view stays mounted (state is preserved across switches).
-        ZStack {
+        // The system tab bar: on iOS 26 it renders as the floating
+        // liquid-glass pill, and long-press-drag scrubs the glass
+        // selection bubble along it (the effect in the Telegram
+        // video). The custom pill could not morph like that, and the
+        // "ghost capsule" was only ever the hidden system bar drawing
+        // behind it — with the bar visible and holding the tab items
+        // there is no ghost, and tab content is inset above it natively.
+        TabView(selection: $selectedTab) {
             NavigationStack {
                 downloadList
                     .navigationTitle(titleForCategory)
@@ -52,87 +42,31 @@ struct ContentView: View {
                         Button("Batal", role: .cancel) {}
                     }
             }
-            .opacity(selectedTab == .downloads ? 1 : 0)
-            .allowsHitTesting(selectedTab == .downloads)
+            .tabItem { Label("Downloads", systemImage: "arrow.down.circle") }
+            .tag(AppTab.downloads)
 
             BrowserView(onExitToDownloads: { selectedTab = .downloads })
-                .opacity(selectedTab == .browser ? 1 : 0)
-                .allowsHitTesting(selectedTab == .browser)
+                .tabItem { Label("Browser", systemImage: "globe") }
+                .tag(AppTab.browser)
 
             AIChatView()
-                .opacity(selectedTab == .ai ? 1 : 0)
-                .allowsHitTesting(selectedTab == .ai)
+                .tabItem { Label("AI", systemImage: "sparkles") }
+                .tag(AppTab.ai)
 
             DownloadedFilesView()
-                .opacity(selectedTab == .files ? 1 : 0)
-                .allowsHitTesting(selectedTab == .files)
+                .tabItem { Label("My Files", systemImage: "folder") }
+                .tag(AppTab.files)
 
             SettingsView(showsDoneButton: false)
-                .opacity(selectedTab == .settings ? 1 : 0)
-                .allowsHitTesting(selectedTab == .settings)
+                .tabItem { Label("Pengaturan", systemImage: "gearshape").labelStyle(.iconOnly) }
+                .tag(AppTab.settings)
         }
-        // Custom Telegram-style bar: a floating liquid-glass pill
-        // (Downloads, Browser, AI, My Files) plus a separate
-        // icon-only gear circle for Settings, like Telegram's detached
-        // search button — no label on it.
-        .safeAreaInset(edge: .bottom) { customTabBar }
         .overlay(alignment: .top) { clipboardBanner }
         .alert("Userscript diimpor", isPresented: Binding(get: { store.lastImportMessage != nil }, set: { if !$0 { store.lastImportMessage = nil } })) {
             Button("OK", role: .cancel) { store.lastImportMessage = nil }
         } message: {
             Text(store.lastImportMessage ?? "")
         }
-    }
-
-    // MARK: - Telegram-style bottom bar
-
-    private var customTabBar: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 2) {
-                tabButton(.downloads, title: "Downloads", icon: "arrow.down.circle")
-                tabButton(.browser, title: "Browser", icon: "globe")
-                tabButton(.ai, title: "AI", icon: "sparkles")
-                tabButton(.files, title: "My Files", icon: "folder")
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 6)
-            .modifier(LiquidGlassBackground(shape: Capsule()))
-            .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
-
-            Button { selectedTab = .settings } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(selectedTab == .settings ? Color.accentColor : Color.primary)
-                    .frame(width: 56, height: 56)
-            }
-            .buttonStyle(.plain)
-            .modifier(LiquidGlassBackground(shape: Circle()))
-            .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
-        }
-        .padding(.horizontal, 16)
-        // Negative bottom padding: the pill sits a little lower, onto
-        // the glass capsule behind it, instead of floating above it.
-        .padding(.bottom, -6)
-    }
-
-    private func tabButton(_ tab: AppTab, title: LocalizedStringKey, icon: String) -> some View {
-        Button { selectedTab = tab } label: {
-            VStack(spacing: 3) {
-                Image(systemName: icon)
-                    .font(.system(size: 22, weight: .semibold))
-                Text(title)
-                    .font(.system(size: 11, weight: .medium))
-            }
-            .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.primary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
-            .background(
-                Capsule().fill(selectedTab == tab ? Color.primary.opacity(0.09) : .clear)
-            )
-        }
-        .buttonStyle(.plain)
     }
 
     private var titleForCategory: String {
