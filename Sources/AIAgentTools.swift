@@ -5,9 +5,10 @@ import Foundation
 // When agent mode is on (OpenAI-shape providers only: ChatGPT, Custom,
 // Balitech), the chat model can call these tools. Every tool is scoped
 // to the app sandbox: the documents folder, the download list, the
-// live browser tabs, and plain URL fetches. There is no shell, no
-// access outside the sandbox, and no delete tool — removing files
-// stays a manual action in My Files.
+// live browser tabs, plain URL fetches, and the DevTools bridge of the
+// active tab (page JavaScript, DOM, console, network, cookies). There
+// is no shell, no access outside the sandbox, and no delete tool —
+// removing files stays a manual action in My Files.
 
 struct AgentTool {
     let name: String
@@ -119,6 +120,31 @@ struct AgentTool {
             description: "Lihat 30 entri riwayat browser terbaru beserta judul dan URL-nya.",
             parameters: object([:])
         ),
+        AgentTool(
+            name: "run_javascript",
+            description: "Jalankan JavaScript di tab browser aktif dan kembalikan hasilnya. Ini console DevTools-nya: baca document.scripts, query DOM, panggil fetch, periksa localStorage — semua dari konteks halaman itu sendiri.",
+            parameters: object(["script": string("Kode JavaScript yang mau dijalankan. Kembalikan string atau JSON.stringify(...) untuk objek — hasil dipotong 8000 karakter.")], required: ["script"])
+        ),
+        AgentTool(
+            name: "get_page_html",
+            description: "Ambil HTML mentah (outerHTML) tab browser aktif, dipotong 8000 karakter.",
+            parameters: object([:])
+        ),
+        AgentTool(
+            name: "get_console_logs",
+            description: "Lihat 50 log console terakhir tab browser aktif (console.log/warn/error dan error JavaScript halaman). Log direkam sejak halaman dimuat.",
+            parameters: object([:])
+        ),
+        AgentTool(
+            name: "get_network_requests",
+            description: "Lihat request jaringan yang terekam di tab browser aktif: navigasi plus fetch/XHR beserta method, status, durasi, dan cuplikan isi respons.",
+            parameters: object(["limit": ["type": "integer", "description": "Jumlah entri terakhir yang ditampilkan, 1–30."]])
+        ),
+        AgentTool(
+            name: "get_cookies",
+            description: "Lihat cookie tab browser aktif: hanya nama, domain, path, dan masa berlaku. Nilai cookie TIDAK PERNAH dikirim ke model.",
+            parameters: object([:])
+        ),
     ]
 }
 
@@ -157,6 +183,16 @@ enum AgentToolRunner {
             return await listBookmarks(store: store)
         case "list_history":
             return await listHistory(store: store)
+        case "run_javascript":
+            return await runJavaScript(script: arguments["script"] as? String ?? "", store: store)
+        case "get_page_html":
+            return await pageHTML(store: store)
+        case "get_console_logs":
+            return await consoleLogs(store: store)
+        case "get_network_requests":
+            return await networkRequests(limit: (arguments["limit"] as? NSNumber)?.intValue ?? 20, store: store)
+        case "get_cookies":
+            return await cookies(store: store)
         default:
             return "Perkakas tidak dikenal: \(name)."
         }
@@ -346,6 +382,141 @@ enum AgentToolRunner {
         }
         session.newTab(url: url)
         return "Dibuka di tab baru: \(urlString)."
+    }
+
+    // MARK: - DevTools (page inspection, same bridge as the </> panel)
+
+    /// Runs JavaScript in the active tab through the same evaluateJS
+    /// the DevTools panel uses. The script executes in the page's
+    /// own context, so it can read the DOM, scripts, storage, and
+    /// call the page's own fetch — exactly like the DevTools console.
+    private static func runJavaScript(script: String, store: DownloadStore) async -> String {
+        let trimmed = script.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Script kosong." }
+        let result = await evaluateOnActiveTab(script: trimmed, store: store)
+        return String(result.prefix(8000))
+    }
+
+    private static func pageHTML(store: DownloadStore) async -> String {
+        let result = await evaluateOnActiveTab(
+            script: "(function(){ try { return document.documentElement.outerHTML || ''; } catch (e) { return 'Error: ' + e.message; } })()",
+            store: store)
+        guard !result.isEmpty, result != "null" else { return "Tab aktif belum memuat halaman." }
+        if result.count > 8000 {
+            return String(result.prefix(8000)) + "\n…(HTML dipotong, total \(result.count) karakter)"
+        }
+        return result
+    }
+
+    /// evaluateJavaScript on the selected tab, resumed through a
+    /// continuation like pageText above.
+    private static func evaluateOnActiveTab(script: String, store: DownloadStore) async -> String {
+        await withCheckedContinuation { continuation in
+            Task { @MainActor in
+                guard let session = store.browserSession,
+                      session.webViews[session.selectedID] != nil else {
+                    continuation.resume(returning: "")
+                    return
+                }
+                session.evaluateJS(script) { result, error in
+                    if let error {
+                        continuation.resume(returning: "Error JavaScript: \(error.localizedDescription)")
+                        return
+                    }
+                    continuation.resume(returning: stringifyJSResult(result))
+                }
+            }
+        }
+    }
+
+    private static func stringifyJSResult(_ result: Any?) -> String {
+        switch result {
+        case nil:
+            return "null"
+        case let s as String:
+            return s
+        case let b as Bool:
+            return b ? "true" : "false"
+        case let n as NSNumber:
+            return n.stringValue
+        case let d as [String: Any]:
+            if let data = try? JSONSerialization.data(withJSONObject: d, options: [.sortedKeys]),
+               let s = String(data: data, encoding: .utf8) { return s }
+            return String(describing: d)
+        case let a as [Any]:
+            if let data = try? JSONSerialization.data(withJSONObject: a, options: []),
+               let s = String(data: data, encoding: .utf8) { return s }
+            return String(describing: a)
+        default:
+            return String(describing: result!)
+        }
+    }
+
+    @MainActor
+    private static func consoleLogs(store: DownloadStore) -> String {
+        guard let session = store.browserSession else {
+            return "Browser tidak sedang aktif."
+        }
+        let entries = Array((session.consoleLogs[session.selectedID] ?? []).suffix(50))
+        guard !entries.isEmpty else {
+            return "Belum ada log console di tab aktif. Log mulai direkam saat halaman dimuat; muat ulang halaman kalau log awal terlewat."
+        }
+        return entries.map { "[\($0.level)] \($0.text)" }.joined(separator: "\n")
+    }
+
+    @MainActor
+    private static func networkRequests(limit: Int, store: DownloadStore) -> String {
+        guard let session = store.browserSession else {
+            return "Browser tidak sedang aktif."
+        }
+        let clamped = max(1, min(limit, 30))
+        let entries = Array((session.networkLogs[session.selectedID] ?? []).suffix(clamped))
+        guard !entries.isEmpty else {
+            return "Belum ada request jaringan yang terekam di tab aktif. Muat ulang halaman untuk merekam navigasi dan fetch/XHR."
+        }
+        var text = entries.map { entry -> String in
+            var line = "\(entry.method) \(entry.status) \(entry.url) (\(entry.durationMs) ms, \(entry.source))"
+            if !entry.responseBody.isEmpty {
+                line += "\n  Respon: \(String(entry.responseBody.prefix(400)))"
+            }
+            return line
+        }.joined(separator: "\n")
+        if text.count > 8000 {
+            text = String(text.prefix(8000)) + "\n…(dipotong)"
+        }
+        return text
+    }
+
+    /// Cookie names, domains, paths, and expiry only. Values are
+    /// never sent to the model: they are session tokens, and a tool
+    /// result travels to the AI provider with the request.
+    private static func cookies(store: DownloadStore) async -> String {
+        await withCheckedContinuation { continuation in
+            Task { @MainActor in
+                guard let session = store.browserSession else {
+                    continuation.resume(returning: "Browser tidak sedang aktif.")
+                    return
+                }
+                session.fetchCookies { found in
+                    guard !found.isEmpty else {
+                        continuation.resume(returning: "Tidak ada cookie di tab aktif.")
+                        return
+                    }
+                    let lines = found.map { cookie -> String in
+                        var parts = ["\(cookie.name) — \(cookie.domain)\(cookie.path)"]
+                        if let expires = cookie.expiresDate {
+                            parts.append("berlaku s.d. \(expires.formatted(date: .abbreviated, time: .shortened))")
+                        } else {
+                            parts.append("cookie sesi")
+                        }
+                        if cookie.isSecure { parts.append("secure") }
+                        if cookie.isHTTPOnly { parts.append("httpOnly") }
+                        return parts.joined(separator: ", ")
+                    }
+                    continuation.resume(returning: lines.joined(separator: "\n") + "\n(Nilai cookie tidak dikirim ke model — hanya nama, domain, dan masa berlakunya.)")
+                }
+            }
+        }
     }
 
     private static func pageText(store: DownloadStore) async -> String {

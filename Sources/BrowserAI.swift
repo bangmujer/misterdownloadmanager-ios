@@ -704,7 +704,7 @@ enum AIClient {
     private static func chatSystemPrompt(_ systemPrompt: String?, tools: [AgentTool]? = nil) -> String {
         var prompt = systemPrompt ?? "Kamu adalah asisten AI serba bisa. Jawablah pertanyaan apa pun tentang topik apa pun, tanpa batasan topik — tidak terbatas pada aplikasi ini. Jawablah dalam bahasa yang sama dengan pesan pengguna, ringkas tapi lengkap."
         if tools != nil {
-            prompt += "\n\nKamu dapat memakai perkakas (tools) yang disediakan untuk memeriksa keadaan aplikasi ini — file, download, tab browser, dan isi URL — sebelum menjawab. Pakailah perkakas saat pertanyaan membutuhkan data nyata dari aplikasi, jangan menebak. Sebutkan dengan singkat perkakas apa yang kamu pakai dan apa hasilnya."
+            prompt += "\n\nKamu dapat memakai perkakas (tools) yang disediakan untuk memeriksa keadaan aplikasi ini — file, download, tab browser, isi URL, dan inspeksi halaman (JavaScript, DOM, console, network, cookie) — sebelum menjawab. Pakailah perkakas saat pertanyaan membutuhkan data nyata dari aplikasi, jangan menebak. Sebutkan dengan singkat perkakas apa yang kamu pakai dan apa hasilnya."
         }
         return prompt
     }
