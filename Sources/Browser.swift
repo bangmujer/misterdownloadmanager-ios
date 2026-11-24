@@ -1406,9 +1406,11 @@ final class BrowserSession: ObservableObject {
   // treatment (iOS 26 style floating tab bar) instead of a fully
   // transparent background: a translucent tint plus backdrop blur,
   // floating as a rounded pill. Other sites keep the transparent
-  // treatment. A bar that already blurs its own backdrop (YouTube's
-  // native glass, which the user approved as-is) is left untouched
-  // so its look is preserved exactly.
+  // treatment. YouTube keeps its native backdrop blur but still
+  // gets the floating rounded card, per the user's request: its
+  // own blur shows through the translucent tint. Bars on other
+  // sites that already blur their own backdrop keep their native
+  // look untouched.
   function isGlassBar(el) {
     try {
       var host = window.location.hostname || '';
@@ -1416,6 +1418,13 @@ final class BrowserSession: ObservableObject {
       if (host.indexOf('vidio.com') >= 0) return true;
       var tag = (el.tagName || '').toLowerCase();
       if (tag.indexOf('pivot') >= 0) return true;
+    } catch (e) {}
+    return false;
+  }
+  function isYouTubeHost() {
+    try {
+      var host = window.location.hostname || '';
+      return host.indexOf('youtube.com') >= 0 || host.indexOf('youtu.be') >= 0;
     } catch (e) {}
     return false;
   }
@@ -1488,7 +1497,7 @@ final class BrowserSession: ObservableObject {
     var cs0 = window.getComputedStyle(el);
     var dark0 = barIsDark(cs0);
     if (dark0 === null) dark0 = isDarkPage();
-    var glass = isGlassBar(el) && !hasNativeGlass(el);
+    var glass = isGlassBar(el) && (!hasNativeGlass(el) || isYouTubeHost());
     if (glass) applyGlassBar(el, dark0);
     else if (isGlassBar(el)) log('native glass kept ' + describe(el));
     var barRect = cssRect(el, z);
@@ -1515,8 +1524,7 @@ final class BrowserSession: ObservableObject {
   }
   // iOS 26 style tab items: semibold labels (inherited into shadow
   // content) and a glass pill behind the active item. Only bars that
-  // received the glass treatment get it, so YouTube's approved look
-  // is untouched. Item tags vary per site (YouTube's renderer, a tab
+  // received the glass treatment get it. Item tags vary per site (YouTube's renderer, a tab
   // role, or plain row children with short labels), so fall back
   // through all three. Re-applied every lift pass so tab switches
   // restyle.
