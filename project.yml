@@ -56,7 +56,7 @@ targets:
         NSPhotoLibraryUsageDescription: "Mister Download Manager memerlukan akses galeri foto untuk memilih gambar dari halaman web yang Anda buka, misalnya saat mengunggah foto di halaman inspeksi."
         NSPhotoLibraryAddUsageDescription: "Mister Download Manager menyimpan gambar dari chat AI ke Foto saat Anda menekan tombol simpan."
         NSSpeechRecognitionUsageDescription: "Mister Download Manager mengubah ucapan Anda menjadi teks saat Anda menekan tombol mikrofon di chat AI."
-        NSMicrophoneUsageDescription: "Mister Download Manager memerlukan akses mikrofon hanya saat halaman web yang Anda buka memintanya, misalnya panggilan suara atau perekaman di halaman tersebut."
+        NSMicrophoneUsageDescription: "Mister Download Manager memerlukan akses mikrofon saat Anda menekan tombol mikrofon di chat AI untuk mengubah ucapan menjadi teks, dan saat halaman web yang Anda buka memintanya, misalnya panggilan suara atau perekaman di halaman tersebut."
         NSLocationWhenInUseUsageDescription: "Mister Download Manager memerlukan akses lokasi hanya saat halaman web yang Anda buka memintanya, misalnya peta atau layanan terdekat."
         UIBackgroundModes:
           - audio
@@ -84,7 +84,7 @@ targets:
       base:
         PRODUCT_NAME: "Mister Download Manager"
         PRODUCT_BUNDLE_IDENTIFIER: com.bangmujer.misterdownloadmanager
-        MARKETING_VERSION: "0.6.100"
+        MARKETING_VERSION: "0.6.101"
         # libsqlite3 is needed for `import SQLite3` (WQFiles-style SQLite viewer).
         OTHER_LDFLAGS: "$(inherited) -lsqlite3"
         CURRENT_PROJECT_VERSION: "1"

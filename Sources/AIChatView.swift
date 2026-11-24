@@ -267,8 +267,13 @@ struct AIChatView: View {
             guard transcriber.isRecording else { return }
             draft = dictationBase + (dictationBase.isEmpty || text.isEmpty ? "" : " ") + text
         }
+        .onChange(of: transcriber.errorMessage) { message in
+            // Dictation failures used to be silent — the mic just
+            // looked dead. Surface the reason in the error banner.
+            if let message { errorText = message }
+        }
         .onChange(of: transcriber.isRecording) { recording in
-            if !recording { dictationBase = draft }
+            if !recording { dictationBase = draft } else { errorText = nil }
         }
         .onAppear {
             provider = AIProvider(rawValue: store.browserSettings.aiChatProvider) ?? .custom

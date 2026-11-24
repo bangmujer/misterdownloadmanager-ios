@@ -1313,8 +1313,13 @@ struct AskAIView: View {
             guard transcriber.isRecording else { return }
             question = dictationBase + (dictationBase.isEmpty || text.isEmpty ? "" : " ") + text
         }
+        .onChange(of: transcriber.errorMessage) { message in
+            // Dictation failures used to be silent — the mic just
+            // looked dead. Surface the reason in the error banner.
+            if let message { errorText = message }
+        }
         .onChange(of: transcriber.isRecording) { recording in
-            if !recording { dictationBase = question }
+            if !recording { dictationBase = question } else { errorText = nil }
         }
         .onChange(of: provider) { newValue in
             requestTask?.cancel()

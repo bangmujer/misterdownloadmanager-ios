@@ -88,7 +88,18 @@ final class SpeechTranscriber: ObservableObject {
                 if let result {
                     self.liveText = result.bestTranscription.formattedString
                 }
-                if error != nil || result?.isFinal == true {
+                if let error {
+                    // A genuine mid-recording failure (network, server):
+                    // tell the user instead of stopping silently. When
+                    // stop() already ran, isRecording is false, so a
+                    // user-initiated stop never surfaces a bogus error.
+                    if self.isRecording {
+                        self.errorMessage = "Pengenalan suara gagal: \(error.localizedDescription)"
+                    }
+                    self.stop()
+                    return
+                }
+                if result?.isFinal == true {
                     self.stop()
                 }
             }
