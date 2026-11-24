@@ -583,6 +583,7 @@ struct AskAIView: View {
     @State private var isLoading = false
     @State private var errorText: String?
     @State private var copiedNotice = false
+    @FocusState private var fieldFocused: Bool
 
     var body: some View {
         NavigationStack {
@@ -616,6 +617,7 @@ struct AskAIView: View {
                             if provider == .custom {
                                 Text("Endpoint").font(.headline)
                                 TextField("https://contoh.com/v3", text: $endpoint)
+                                    .focused($fieldFocused)
                                     .autocapitalization(.none).autocorrectionDisabled()
                                     .padding(.horizontal, 12).padding(.vertical, 10)
                                     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
@@ -624,11 +626,13 @@ struct AskAIView: View {
                             }
                             Text("Model").font(.headline)
                             TextField("Model", text: $model)
+                                .focused($fieldFocused)
                                 .autocapitalization(.none).autocorrectionDisabled()
                                 .padding(.horizontal, 12).padding(.vertical, 10)
                                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
                             Text("API key").font(.headline)
                             SecureField("API key \(provider.displayName)", text: $apiKey)
+                                .focused($fieldFocused)
                                 .autocapitalization(.none).autocorrectionDisabled()
                                 .padding(.horizontal, 12).padding(.vertical, 10)
                                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
@@ -662,6 +666,7 @@ struct AskAIView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Pertanyaan").font(.headline)
                         TextEditor(text: $question)
+                            .focused($fieldFocused)
                             .frame(minHeight: 80)
                             .padding(8)
                             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
@@ -744,14 +749,24 @@ struct AskAIView: View {
                 }
                 .padding(16)
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Minta AI")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Selesai") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Selesai") { dismiss() } }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button { fieldFocused = false } label: {
+                        Image(systemName: "chevron.down")
+                    }
+                }
+            }
         }
         .onAppear {
             provider = AIProvider(rawValue: store.browserSettings.aiProvider) ?? .gemini
             loadModelAndKey()
         }
+        .onDisappear { fieldFocused = false }
         .onChange(of: provider) { newValue in
             store.browserSettings.aiProvider = newValue.rawValue
             store.saveBrowserSettings()
