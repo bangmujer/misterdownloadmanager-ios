@@ -80,6 +80,10 @@ struct ContentView: View {
         store.selectedCategory == .all ? "Mister Download Manager" : store.selectedCategory.rawValue
     }
 
+    private var activeDownloadCount: Int { store.items.filter { $0.state == .downloading }.count }
+    private var aggregateSpeed: Double { store.items.filter { $0.state == .downloading }.reduce(0) { $0 + $1.speedBytesPerSec } }
+    private var totalDownloadedBytes: Int64 { store.items.reduce(0) { $0 + $1.downloadedBytes } }
+
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
@@ -116,12 +120,18 @@ struct ContentView: View {
 
     private var downloadList: some View {
         List {
+            Section {
+                HStack(spacing: 12) {
+                    MDMStatCard(icon: "arrow.down.circle", label: "Aktif", value: "\(activeDownloadCount)", accent: .mdmAccent)
+                    MDMStatCard(icon: "speedometer", label: "Kecepatan", value: formatSpeed(aggregateSpeed), accent: .mdmAccent2)
+                    MDMStatCard(icon: "archivebox", label: "Total", value: formatBytes(totalDownloadedBytes), accent: .mdmSuccess)
+                }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 4, trailing: 16))
+                .listRowSeparator(.hidden)
+            }
             if store.filteredItems().isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "arrow.down.circle").font(.largeTitle).foregroundStyle(.secondary)
-                    Text("No downloads").font(.headline)
-                    Text("Tap + to add a link, a torrent, or grab a video from a page.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                }.frame(maxWidth: .infinity).padding()
+                MDMEmptyState(icon: "arrow.down.circle", title: "No downloads", message: "Tap + to add a link, a torrent, or grab a video from a page.")
             }
             ForEach(store.filteredItems()) { item in
                 NavigationLink(value: item.id) {
@@ -170,44 +180,49 @@ struct ContentView: View {
 struct DownloadRowView: View {
     var item: DownloadItem
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Image(systemName: item.category.systemImage).foregroundStyle(.tint)
-                Text(item.fileName).lineLimit(1).font(.headline)
-                Spacer()
-                Text(item.state.label).font(.caption).foregroundStyle(stateColor)
+        HStack(alignment: .top, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(item.category.mdmTint.opacity(0.16))
+                    .frame(width: 44, height: 44)
+                Image(systemName: item.category.systemImage)
+                    .foregroundStyle(item.category.mdmTint)
+                    .font(.system(size: 18, weight: .semibold))
             }
-            ProgressView(value: item.progress)
-                .tint(item.state == .failed ? .red : nil)
-            if !item.segments.isEmpty && item.state == .downloading {
-                SegmentBarView(segments: item.segments)
-            }
-            HStack {
-                Text(item.totalBytes.map { formatBytes($0) } ?? "Unknown size").font(.caption).foregroundStyle(.secondary)
-                if item.state == .downloading {
-                    Text(formatSpeed(item.speedBytesPerSec)).font(.caption).foregroundStyle(.secondary)
-                    Text("ETA \(formatETA(item.etaSeconds))").font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(item.fileName).lineLimit(1).font(.headline)
+                    Spacer()
+                    MDMStatusBadge(text: item.state.label, tone: statusTone)
                 }
-                Spacer()
-                Text("\(Int(item.progress * 100))%").font(.caption.monospacedDigit())
-            }
-            if let err = item.errorMessage, item.state == .failed {
-                Text(err).font(.caption).foregroundStyle(.red).lineLimit(2)
-            }
-            if item.checksumVerified == false {
-                Text("Checksum mismatch — file may be corrupt.").font(.caption).foregroundStyle(.red)
+                MDMProgressBar(progress: item.progress, segments: item.segments, totalBytes: item.totalBytes, failed: item.state == .failed)
+                HStack {
+                    Text(item.totalBytes.map { formatBytes($0) } ?? "Unknown size").font(.caption).foregroundStyle(.secondary)
+                    if item.state == .downloading {
+                        Text(formatSpeed(item.speedBytesPerSec)).font(.caption).foregroundStyle(.secondary)
+                        Text("ETA \(formatETA(item.etaSeconds))").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text("\(Int(item.progress * 100))%").font(.caption.monospacedDigit())
+                }
+                if let err = item.errorMessage, item.state == .failed {
+                    Text(err).font(.caption).foregroundStyle(.red).lineLimit(2)
+                }
+                if item.checksumVerified == false {
+                    Text("Checksum mismatch — file may be corrupt.").font(.caption).foregroundStyle(.red)
+                }
             }
         }
         .padding(.vertical, 4)
     }
-    private var stateColor: Color {
+    private var statusTone: MDMStatusTone {
         switch item.state {
-        case .completed: return .green
-        case .failed: return .red
-        case .downloading: return .blue
-        case .paused: return .orange
-        case .queued: return .secondary
-        case .verifying: return .purple
+        case .completed: return .success
+        case .failed: return .error
+        case .downloading: return .accent
+        case .paused: return .warning
+        case .queued: return .muted
+        case .verifying: return .teal
         }
     }
 }

@@ -3026,11 +3026,11 @@ struct BrowserView: View {
     }
 
     private var isNightMode: Bool {
-        ["dark", "metro", "breeze", "highContrast"].contains(store.settings.themeName)
+        ["dark", "metro", "breeze", "highContrast", "premiumDark"].contains(store.settings.themeName)
     }
 
     private func toggleNightMode() {
-        store.settings.themeName = isNightMode ? "light" : "dark"
+        store.settings.themeName = isNightMode ? "premiumLight" : "premiumDark"
         store.save()
     }
 

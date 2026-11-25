@@ -130,7 +130,7 @@ struct AppSettings: Codable {
     var queueEnabled: Bool = false
     var userAgent: String = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15"
     var language: String = "en"
-    var themeName: String = "system"
+    var themeName: String = "premiumDark"
     var interfaceScale: Double = 1.0
     var notificationsEnabled: Bool = true
     var clipboardMonitor: Bool = true
@@ -153,6 +153,11 @@ struct AppSettings: Codable {
 
 enum ThemeName: String, CaseIterable, Identifiable {
     case system, classic, dark, light, highContrast, metro, adwaita, breeze, luna, aero, aqua
+    case premiumDark, premiumLight
+
+    /// Themes offered in Settings (Paket B). Legacy desktop themes stay in
+    /// the enum so saved values keep decoding, but are no longer offered.
+    static var pickerCases: [ThemeName] { [.system, .premiumDark, .premiumLight] }
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -161,6 +166,8 @@ enum ThemeName: String, CaseIterable, Identifiable {
         case .dark: return "Dark"
         case .light: return "Light"
         case .highContrast: return "High contrast"
+        case .premiumDark: return "Premium Dark"
+        case .premiumLight: return "Premium Light"
         case .metro: return "Metro"
         case .adwaita: return "Adwaita"
         case .breeze: return "Breeze"

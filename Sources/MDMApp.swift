@@ -49,8 +49,8 @@ struct MDMApp: App {
 
     private func colorScheme(for theme: String) -> ColorScheme? {
         switch theme {
-        case "dark", "metro", "breeze": return .dark
-        case "light", "classic", "luna", "aero", "aqua", "adwaita": return .light
+        case "dark", "metro", "breeze", "premiumDark": return .dark
+        case "light", "classic", "luna", "aero", "aqua", "adwaita", "premiumLight": return .light
         case "highContrast": return .dark
         default: return nil
         }
@@ -65,7 +65,7 @@ struct MDMApp: App {
         case "aero": return .indigo
         case "aqua": return .mint
         case "highContrast": return .yellow
-        default: return .blue
+        default: return Color.mdmAccent
         }
     }
 }

@@ -220,7 +220,7 @@ struct SettingsView: View {
                 }
                 Section("Appearance, Language & Scale") {
                     Picker("Theme", selection: $store.settings.themeName) {
-                        ForEach(ThemeName.allCases) { Text($0.label).tag($0.rawValue) }
+                        ForEach(ThemeName.pickerCases) { Text($0.label).tag($0.rawValue) }
                     }
                     Picker("Language", selection: $store.settings.language) {
                         Text("English").tag("en"); Text("Bahasa Indonesia").tag("id"); Text("العربية (RTL)").tag("ar"); Text("Français").tag("fr"); Text("Deutsch").tag("de"); Text("日本語").tag("ja")
