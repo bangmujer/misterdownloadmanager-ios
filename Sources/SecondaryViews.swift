@@ -139,12 +139,28 @@ private struct SpeedLimitRow: View {
     }
 }
 
+/// Which slice of Settings to show. The Tools hub cards that land in
+/// Settings open a focused slice — only that card's own section — instead
+/// of the whole form; nil means the full form (gear, Downloads toolbar).
+enum SettingsFocus: Hashable {
+    case debrid, remote, network
+
+    var title: String {
+        switch self {
+        case .debrid: return "Debrid"
+        case .remote: return "Remote Control"
+        case .network: return "Proxy & DNS"
+        }
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var store: DownloadStore
     @Environment(\.dismiss) var dismiss
     /// In the bottom tab bar there is nothing to dismiss, so the Done
     /// button is hidden; as a sheet it stays.
     var showsDoneButton: Bool = true
+    var focus: SettingsFocus? = nil
     @State private var cacheBytes: Int64 = 0
     @State private var cacheMessage: String?
     @State private var editingDebrid: DebridService?
@@ -169,6 +185,7 @@ struct SettingsView: View {
 
     private var settingsForm: some View {
         Form {
+            if focus == nil {
                 Section("Download") {
                     HStack {
                         Text("Max connections per download")
@@ -206,12 +223,16 @@ struct SettingsView: View {
                     }
                     Text("Menghapus sisa file sementara (.part dan potongan segmen) dari download yang sudah dihapus atau selesai. File .part milik download yang masih antre, jeda, atau gagal dipertahankan agar bisa dilanjutkan.").font(.caption).foregroundStyle(.secondary)
                 }
+            }
+            if focus == nil || focus == .debrid {
                 Section("Debrid — your own keys") {
                     ForEach(DebridService.allCases) { service in
                         debridKeyRow(service)
                     }
                     Text("Keys live only in this device's Keychain — never in the settings file. Debrid is experimental in the desktop app too.").font(.caption).foregroundStyle(.secondary)
                 }
+            }
+            if focus == nil || focus == .network {
                 Section("Jaringan") {
                     Toggle("Wi-Fi only (kill-switch approximation)", isOn: $store.settings.wifiOnly)
                     Toggle("Use proxy", isOn: $store.settings.proxyEnabled)
@@ -221,6 +242,8 @@ struct SettingsView: View {
                     TextField("Custom DNS (stored only)", text: $store.settings.customDNS)
                     Text("iOS URLSession cannot override DNS per app, so a custom DNS value is stored for reference only and does not change resolution.").font(.caption).foregroundStyle(.secondary)
                 }
+            }
+            if focus == nil {
                 Section("Appearance, Language & Scale") {
                     Picker("Theme", selection: $store.settings.themeName) {
                         ForEach(ThemeName.pickerCases) { Text($0.label).tag($0.rawValue) }
@@ -235,6 +258,8 @@ struct SettingsView: View {
                     Toggle("Download notifications", isOn: $store.settings.notificationsEnabled)
                     Toggle("Watch clipboard for links", isOn: $store.settings.clipboardMonitor)
                 }
+            }
+            if focus == nil || focus == .remote {
                 Section("Remote control (LAN)") {
                     Toggle("Enable remote control", isOn: $store.settings.remoteControlEnabled)
                     IntField("Port", value: $store.settings.remotePort, in: 1024...65535)
@@ -252,6 +277,8 @@ struct SettingsView: View {
                         .font(.subheadline)
                     Text("Plain HTTP on trusted home Wi-Fi only, while the app is in the foreground. Requests without the pairing token are refused (401).").font(.caption).foregroundStyle(.secondary)
                 }
+            }
+            if focus == nil {
                 Section("Browser — Umum") {
                     Picker("Search engine", selection: $store.browserSettings.searchEngine) {
                         ForEach(SearchEngine.all, id: \.self) { engine in
@@ -299,9 +326,10 @@ struct SettingsView: View {
                     Link("License: GPL-3.0", destination: URL(string: "https://www.gnu.org/licenses/gpl-3.0.html")!)
                 }
             }
+            }
             .onChange(of: store.settings.language) { _ in store.save() }
             .toolbar {
-                ToolbarItem(placement: .principal) { Text("Options") }
+                ToolbarItem(placement: .principal) { Text(focus?.title ?? "Options") }
                 if showsDoneButton {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { store.save(); dismiss() } }
                 }

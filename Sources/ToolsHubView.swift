@@ -17,7 +17,7 @@ struct ToolsHubView: View {
     @State private var showingFileSharing = false
 
     private enum HubSheet { case grabber, torrent, adBlock, fileSharing }
-    private enum HubDestination: Hashable { case apiTester, devTools, passwords, settings }
+    private enum HubDestination: Hashable { case apiTester, devTools, passwords, settings(SettingsFocus?) }
 
     private struct HubCard: Identifiable {
         var id: String { title }
@@ -69,13 +69,13 @@ struct ToolsHubView: View {
                 }
             case .passwords:
                 PasswordsView()
-            case .settings:
-                SettingsView(showsDoneButton: false)
+            case .settings(let focus):
+                SettingsView(showsDoneButton: false, focus: focus)
             }
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink(value: HubDestination.settings) {
+                NavigationLink(value: HubDestination.settings(nil)) {
                     Image(systemName: "gearshape")
                 }
             }
@@ -93,8 +93,8 @@ struct ToolsHubView: View {
         return [
             HubCard(icon: "play.rectangle", accent: .mdmAccent, title: "Video Grabber", subtitle: "Find direct media links in a page's HTML", destination: nil, sheet: .grabber, disabled: false),
             HubCard(icon: "magnet", accent: .mdmWarning, title: "Add Torrent", subtitle: ".torrent metadata + experimental peer download", destination: nil, sheet: .torrent, disabled: false),
-            HubCard(icon: "key.fill", accent: .mdmSuccess, title: "Debrid", subtitle: "\(storedDebrid) of 5 keys saved in Keychain", destination: .settings, sheet: nil, disabled: false),
-            HubCard(icon: "wifi", accent: .mdmAccent2, title: "Remote Control", subtitle: store.settings.remoteControlEnabled ? "On — \(store.remoteAddress ?? "")" : "Off — set up in Settings", destination: .settings, sheet: nil, disabled: false),
+            HubCard(icon: "key.fill", accent: .mdmSuccess, title: "Debrid", subtitle: "\(storedDebrid) of 5 keys saved in Keychain", destination: .settings(.debrid), sheet: nil, disabled: false),
+            HubCard(icon: "wifi", accent: .mdmAccent2, title: "Remote Control", subtitle: store.settings.remoteControlEnabled ? "On — \(store.remoteAddress ?? "")" : "Off — set up in Settings", destination: .settings(.remote), sheet: nil, disabled: false),
         ]
     }
 
@@ -116,7 +116,7 @@ struct ToolsHubView: View {
     private var networkCards: [HubCard] {
         [
             HubCard(icon: "qrcode", accent: .mdmAccent, title: "Berbagi Berkas", subtitle: store.settings.remoteControlEnabled ? "Kode QR + alamat untuk perangkat di WiFi yang sama" : "Belum aktif — ketuk untuk mengatur", destination: nil, sheet: .fileSharing, disabled: false),
-            HubCard(icon: "network", accent: .mdmAccent2, title: "Proxy & DNS", subtitle: "In Settings — Network", destination: .settings, sheet: nil, disabled: false),
+            HubCard(icon: "network", accent: .mdmAccent2, title: "Proxy & DNS", subtitle: "In Settings — Network", destination: .settings(.network), sheet: nil, disabled: false),
         ]
     }
 
