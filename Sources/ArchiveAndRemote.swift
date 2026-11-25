@@ -1,6 +1,7 @@
 import Foundation
 import ZIPFoundation
 import Network
+import UniformTypeIdentifiers
 
 /// Archive extraction: ZIP via ZIPFoundation (stored + deflate). 7z/RAR need
 /// the external 7-Zip program on desktop; on iOS there is no such helper, so
@@ -54,12 +55,21 @@ extension String {
 /// item or an `Authorization: Bearer` header — or it gets a 401. The token
 /// lives in the Keychain, is shown in Settings → Remote control, and is
 /// baked into the address shown there, so first use needs no typing.
+///
+/// File sharing rides on the same listener and the same token: `GET /files`
+/// lists the Downloads folder and `GET /files/<name>` streams the file down,
+/// so a PC or another phone on the same Wi-Fi can fetch downloads by
+/// scanning the QR code in the sharing sheet.
 final class RemoteServer {
     private var listener: NWListener?
     private weak var store: DownloadStore?
+    /// Downloads folder captured at start (off-main-thread reads must not
+    /// touch the store's @Published state).
+    private var shareBaseDir: URL?
 
     func start(store: DownloadStore, port: UInt16) {
         self.store = store
+        shareBaseDir = store.downloadsDir
         _ = MDMSecrets.ensureRemoteToken()
         do {
             let params = NWParameters.tcp
@@ -103,6 +113,7 @@ final class RemoteServer {
                     headers[String(kv[0]).lowercased()] = kv[1].trimmingCharacters(in: .whitespaces)
                 }
             }
+            if self.serveFileDownloadIfNeeded(rawPath: rawPath, headers: headers, connection: connection) { return }
             let (status, body) = self.response(statusAndBodyFor: rawPath, headers: headers)
             let response = "HTTP/1.1 \(status)\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
             connection.send(content: response.data(using: .utf8), completion: .contentProcessed { _ in connection.cancel() })
@@ -110,17 +121,24 @@ final class RemoteServer {
         }
     }
 
+    /// Token check shared by the HTML pages and the file-sharing routes:
+    /// returns the token when the request carries it, nil otherwise.
+    private func authorizedToken(rawPath: String, headers: [String: String]) -> String? {
+        let token = MDMSecrets.ensureRemoteToken()
+        let comps = URLComponents(string: "http://x\(rawPath)")
+        let queryToken = comps?.queryItems?.first(where: { $0.name == "token" })?.value
+        let headerToken = headers["authorization"].map { $0.replacingOccurrences(of: "Bearer ", with: "") }
+        return (queryToken == token || headerToken == token) ? token : nil
+    }
+
     private func response(statusAndBodyFor rawPath: String, headers: [String: String]) -> (String, String) {
         // S1: the pairing token is read fresh on every request, so
         // regenerating it in Settings takes effect immediately.
-        let token = MDMSecrets.ensureRemoteToken()
-        let comps = URLComponents(string: "http://x\(rawPath)")
-        let path = comps?.path ?? rawPath
-        let queryToken = comps?.queryItems?.first(where: { $0.name == "token" })?.value
-        let headerToken = headers["authorization"].map { $0.replacingOccurrences(of: "Bearer ", with: "") }
-        guard queryToken == token || headerToken == token else {
+        guard let token = authorizedToken(rawPath: rawPath, headers: headers) else {
             return ("401 Unauthorized", "<html><head><meta name='viewport' content='width=device-width'></head><body><h1>401 — token pairing dibutuhkan</h1><p>Buka alamat lengkap dari Pengaturan → Remote control di aplikasi, atau kirim header <code>Authorization: Bearer &lt;token&gt;</code>.</p></body></html>")
         }
+        let comps = URLComponents(string: "http://x\(rawPath)")
+        let path = comps?.path ?? rawPath
         guard let store = store else { return ("200 OK", "<h1>MDM iOS</h1>") }
         // Actions are read synchronously from the store's published state on the
         // main actor via a quick hop; mutations go through Task so the HTTP
@@ -139,13 +157,109 @@ final class RemoteServer {
             let idStr = String(path.dropFirst("/resume/".count))
             if let id = UUID(uuidString: idStr) { Task { @MainActor in store.start(id: id) } }
         }
+        if path == "/files" || path.hasPrefix("/files/") {
+            let rel = String(path.dropFirst("/files".count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            return filesListingResponse(relativePath: rel, token: token)
+        }
         // Snapshot read must happen on the main actor; the listener thread
         // cannot safely read @Published state, so render from a cached copy
         // refreshed by the store (see RemoteSnapshot below).
         let rows = RemoteSnapshot.shared.rows.map { row in
             "<li>\(row.name.mdmHTMLEscaped) — \(row.state.mdmHTMLEscaped) \(Int(row.progress * 100))% — <a href='/pause/\(row.id)?token=\(token.mdmHTMLEscaped)'>Pause</a> <a href='/resume/\(row.id)?token=\(token.mdmHTMLEscaped)'>Resume</a></li>"
         }.joined()
-        return ("200 OK", "<html><head><meta name='viewport' content='width=device-width'></head><body><h1>Mister Download Manager (iOS)</h1><p>Remote control — token pairing aktif.</p><form action='/add'><input type='hidden' name='token' value='\(token.mdmHTMLEscaped)'><input name='url' placeholder='https://…' size='40'><button>Add</button></form><ul>\(rows)</ul></body></html>")
+        return ("200 OK", "<html><head><meta name='viewport' content='width=device-width'></head><body><h1>Mister Download Manager (iOS)</h1><p>Remote control — token pairing aktif.</p><p><a href='/files?token=\(token.mdmHTMLEscaped)'>Berkas unduhan — berbagi via WiFi</a></p><form action='/add'><input type='hidden' name='token' value='\(token.mdmHTMLEscaped)'><input name='url' placeholder='https://…' size='40'><button>Add</button></form><ul>\(rows)</ul></body></html>")
+    }
+
+    /// `GET /files` listing (and 404 for paths outside the shared folder or
+    /// that do not exist). File downloads themselves are intercepted in
+    /// `handle` and streamed by `serveFileDownloadIfNeeded`.
+    private func filesListingResponse(relativePath: String, token: String) -> (String, String) {
+        let pageHead = "<html><head><meta name='viewport' content='width=device-width'></head><body>"
+        guard let base = shareBaseDir else {
+            return ("200 OK", "\(pageHead)<h1>Berbagi berkas belum siap</h1></body></html>")
+        }
+        let basePath = base.standardized.resolvingSymlinksInPath().path
+        let dir = base.appendingPathComponent(relativePath).standardized.resolvingSymlinksInPath()
+        guard dir.path == basePath || dir.path.hasPrefix(basePath + "/") else {
+            return ("404 Not Found", "\(pageHead)<h1>404 — di luar folder berbagi</h1></body></html>")
+        }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else {
+            return ("404 Not Found", "\(pageHead)<h1>404 — berkas tidak ditemukan</h1></body></html>")
+        }
+        let entries = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey], options: [.skipsHiddenFiles])) ?? []
+        let visible = entries.filter { !$0.lastPathComponent.hasSuffix(".part") }
+        let sorted = visible.sorted {
+            let aDir = (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let bDir = (try? $1.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            if aDir != bDir { return aDir }
+            return $0.lastPathComponent.localizedCaseInsensitiveCompare($1.lastPathComponent) == .orderedAscending
+        }
+        let rows = sorted.map { entry -> String in
+            let isDirectory = (try? entry.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let rel = relativePath.isEmpty ? entry.lastPathComponent : relativePath + "/" + entry.lastPathComponent
+            let href = "/files/" + (rel.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? rel) + "?token=\(token.mdmHTMLEscaped)"
+            let name = entry.lastPathComponent.mdmHTMLEscaped
+            if isDirectory {
+                return "<li>📁 <a href='\(href)'>\(name)/</a></li>"
+            }
+            let size = (try? entry.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            let sizeText = ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)
+            return "<li>📄 <a href='\(href)'>\(name)</a> (\(sizeText.mdmHTMLEscaped))</li>"
+        }.joined()
+        let parentLink: String
+        if relativePath.isEmpty {
+            parentLink = ""
+        } else {
+            let parent = (relativePath as NSString).deletingLastPathComponent
+            let parentHref = parent.isEmpty ? "/files?token=\(token.mdmHTMLEscaped)" : "/files/\(parent.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? parent)?token=\(token.mdmHTMLEscaped)"
+            parentLink = "<p><a href='\(parentHref)'>← Kembali</a></p>"
+        }
+        let title = relativePath.isEmpty ? "Berkas unduhan" : "Berkas unduhan — \(relativePath.mdmHTMLEscaped)"
+        return ("200 OK", "\(pageHead)<h1>\(title)</h1><p><a href='/?token=\(token.mdmHTMLEscaped)'>← Remote control</a></p>\(parentLink)<ul>\(rows)</ul><p>Unduhan langsung dari folder Unduhan di perangkat ini, selama aplikasi terbuka.</p></body></html>")
+    }
+
+    /// Streams one shared file in 64 KB chunks so a large download never
+    /// sits whole in memory. Returns true only for a token-authorized
+    /// request for a regular file inside the shared folder; anything else
+    /// falls through to the HTML responder (which also produces the 401
+    /// for a missing token). Sends complete synchronously — the receive
+    /// closure's `defer { connection.cancel() }` fires only after the
+    /// last chunk is acknowledged.
+    private func serveFileDownloadIfNeeded(rawPath: String, headers: [String: String], connection: NWConnection) -> Bool {
+        guard authorizedToken(rawPath: rawPath, headers: headers) != nil,
+              let base = shareBaseDir else { return false }
+        let comps = URLComponents(string: "http://x\(rawPath)")
+        let path = comps?.path ?? rawPath
+        guard path.hasPrefix("/files/") else { return false }
+        let rel = String(path.dropFirst("/files/".count))
+        guard !rel.isEmpty else { return false }
+        let basePath = base.standardized.resolvingSymlinksInPath().path
+        let target = base.appendingPathComponent(rel).standardized.resolvingSymlinksInPath()
+        guard target.path == basePath || target.path.hasPrefix(basePath + "/") else { return false }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: target.path, isDirectory: &isDir), !isDir.boolValue else { return false }
+        let size = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.uint64Value ?? 0
+        let mime = UTType(filenameExtension: target.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
+        let safeName = target.lastPathComponent
+            .replacingOccurrences(of: "\"", with: "_")
+            .replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: "\n", with: "")
+        let header = "HTTP/1.1 200 OK\r\nContent-Type: \(mime)\r\nContent-Disposition: attachment; filename=\"\(safeName)\"\r\nContent-Length: \(size)\r\nConnection: close\r\n\r\n"
+        sendAndWait(connection: connection, data: Data(header.utf8))
+        if let handle = try? FileHandle(forReadingFrom: target) {
+            defer { try? handle.close() }
+            while let chunk = try? handle.read(upToCount: 65536), !chunk.isEmpty {
+                sendAndWait(connection: connection, data: chunk)
+            }
+        }
+        return true
+    }
+
+    private func sendAndWait(connection: NWConnection, data: Data) {
+        let done = DispatchSemaphore(value: 0)
+        connection.send(content: data, completion: .contentProcessed { _ in done.signal() })
+        done.wait()
     }
 
     static func localIPAddress() -> String? {

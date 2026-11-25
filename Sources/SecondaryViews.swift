@@ -151,6 +151,7 @@ struct SettingsView: View {
     @State private var debridDraft = ""
     @State private var debridTick = 0
     @State private var remoteToken = ""
+    @State private var showingFileSharing = false
     var body: some View {
         // In the tab bar the system (Lainnya overflow) navigation
         // already provides the bar — a second NavigationStack here
@@ -247,6 +248,8 @@ struct SettingsView: View {
                         .font(.subheadline)
                         Text("The address above already contains the token. A browser without the correct token gets a 401. A new token takes effect immediately — reopen the address afterwards.").font(.caption).foregroundStyle(.secondary)
                     }
+                    Button { showingFileSharing = true } label: { Label("Bagikan berkas via WiFi", systemImage: "qrcode") }
+                        .font(.subheadline)
                     Text("Plain HTTP on trusted home Wi-Fi only, while the app is in the foreground. Requests without the pairing token are refused (401).").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Browser — Umum") {
@@ -308,6 +311,7 @@ struct SettingsView: View {
             .onReceive(store.$browserSettings.dropFirst()) { _ in store.saveBrowserSettings() }
             .scrollContentBackground(.hidden)
             .background(Color.mdmBackground)
+            .sheet(isPresented: $showingFileSharing) { FileSharingView() }
     }
 
     /// One debrid service's Keychain row: saved status + edit/save/delete.

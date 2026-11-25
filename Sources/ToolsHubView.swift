@@ -14,8 +14,9 @@ struct ToolsHubView: View {
     @State private var showingGrabber = false
     @State private var showingTorrent = false
     @State private var showingAdBlock = false
+    @State private var showingFileSharing = false
 
-    private enum HubSheet { case grabber, torrent, adBlock }
+    private enum HubSheet { case grabber, torrent, adBlock, fileSharing }
     private enum HubDestination: Hashable { case apiTester, devTools, passwords, settings }
 
     private struct HubCard: Identifiable {
@@ -82,6 +83,7 @@ struct ToolsHubView: View {
         .sheet(isPresented: $showingGrabber) { VideoGrabberView() }
         .sheet(isPresented: $showingTorrent) { TorrentAddView() }
         .sheet(isPresented: $showingAdBlock) { AdBlockPanelView() }
+        .sheet(isPresented: $showingFileSharing) { FileSharingView() }
     }
 
     // MARK: - Cards
@@ -113,6 +115,7 @@ struct ToolsHubView: View {
 
     private var networkCards: [HubCard] {
         [
+            HubCard(icon: "qrcode", accent: .mdmAccent, title: "Berbagi Berkas", subtitle: store.settings.remoteControlEnabled ? "Kode QR + alamat untuk perangkat di WiFi yang sama" : "Belum aktif — ketuk untuk mengatur", destination: nil, sheet: .fileSharing, disabled: false),
             HubCard(icon: "network", accent: .mdmAccent2, title: "Proxy & DNS", subtitle: "In Settings — Network", destination: .settings, sheet: nil, disabled: false),
         ]
     }
@@ -157,6 +160,7 @@ struct ToolsHubView: View {
         case .grabber: showingGrabber = true
         case .torrent: showingTorrent = true
         case .adBlock: showingAdBlock = true
+        case .fileSharing: showingFileSharing = true
         }
     }
 }
