@@ -214,6 +214,9 @@ final class DownloadStore: ObservableObject {
               let state = try? JSONDecoder().decode(SavedState.self, from: data) else { return }
         items = state.items
         settings = state.settings
+        // S4: plaintext debrid keys from older installs move to the
+        // Keychain once; the settings fields stay empty afterwards.
+        if MDMSecrets.migrateDebridKeys(settings: &settings) { save() }
         // A relaunch must never show a stale "downloading" state.
         for i in items.indices where items[i].state == .downloading { items[i].state = .paused }
     }

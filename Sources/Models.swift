@@ -141,6 +141,8 @@ struct AppSettings: Codable {
     var customDNS: String = "" // stored; iOS URLSession cannot override DNS per-app, shown honestly in UI
     var remoteControlEnabled: Bool = false
     var remotePort: Int = 8080
+    // Legacy plaintext holders: values from older installs are migrated to
+    // the Keychain on load (see MDMSecrets) and these stay empty at rest.
     var realDebridKey: String = ""
     var allDebridKey: String = ""
     var premiumizeKey: String = ""

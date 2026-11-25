@@ -444,9 +444,9 @@ struct DevToolsView: View {
             HStack(spacing: 10) {
                 Image(systemName: "chevron.left.forwardslash.chevron.right")
                     .font(.body.weight(.semibold))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(Color.mdmAccent)
                     .frame(width: 34, height: 34)
-                    .background(Color.blue.opacity(0.15), in: Circle())
+                    .background(Color.mdmAccent.opacity(0.15), in: Circle())
                 VStack(alignment: .leading, spacing: 1) {
                     Text("DevTools").font(.headline)
                     Text(session.selectedTab?.host ?? "—").font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -456,7 +456,7 @@ struct DevToolsView: View {
                     Image(systemName: "xmark")
                         .font(.body.weight(.semibold))
                         .frame(width: 34, height: 34)
-                        .background(Color(.secondarySystemBackground), in: Circle())
+                        .background(Color.mdmSurfaceMuted, in: Circle())
                 }
             }
             .padding(.horizontal, 14).padding(.top, 10).padding(.bottom, 6)

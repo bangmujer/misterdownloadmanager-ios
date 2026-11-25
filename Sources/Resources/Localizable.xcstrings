@@ -3550,6 +3550,106 @@
           }
         }
       }
+    },
+    "Tools": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Perkakas"
+          }
+        }
+      }
+    },
+    "Developer": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pengembang"
+          }
+        }
+      }
+    },
+    "Privacy": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Privasi"
+          }
+        }
+      }
+    },
+    "Network": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jaringan"
+          }
+        }
+      }
+    },
+    "Video Grabber": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pengambil Video"
+          }
+        }
+      }
+    },
+    "AdBlock & Extensions": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AdBlock & Ekstensi"
+          }
+        }
+      }
+    },
+    "Remote Control": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontrol Jarak Jauh"
+          }
+        }
+      }
+    },
+    "Passwords": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kata Sandi"
+          }
+        }
+      }
+    },
+    "Search tools": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cari perkakas"
+          }
+        }
+      }
+    },
+    "All tools in one place.": {
+      "localizations": {
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Semua perkakas dalam satu tempat."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

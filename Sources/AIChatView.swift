@@ -56,10 +56,38 @@ struct AIChatView: View {
     @State private var exportNotice: String?
     @FocusState private var inputFocused: Bool
 
+    private var providerPillText: String {
+        let name: String
+        switch provider {
+        case .gemini: name = "Gemini"
+        case .chatgpt: name = "ChatGPT"
+        case .claude: name = "Claude"
+        case .balitech: name = "Balitech"
+        case .custom: name = "Custom"
+        case .meta: name = "Meta"
+        }
+        return model.isEmpty ? name : "\(name) • \(model)"
+    }
+
     var body: some View {
         ZStack(alignment: .leading) {
             NavigationStack {
             VStack(spacing: 0) {
+                // AI Studio header pill: provider + model + key status.
+                // Tapping opens the same settings sheet as the gear.
+                Button { showingSettings = true } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sparkles")
+                        Text(providerPillText).font(.subheadline).fontWeight(.medium).lineLimit(1)
+                        Circle().fill(keySaved ? Color.mdmSuccess : Color.mdmWarning).frame(width: 8, height: 8)
+                        Image(systemName: "chevron.up.chevron.down").font(.caption)
+                    }
+                    .foregroundStyle(Color.primary)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Color.mdmSurfaceMuted, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 10)
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 10) {
@@ -217,6 +245,7 @@ struct AIChatView: View {
             // needs a small gap — the old 72pt (from the discarded
             // bar-height measurement) floated it far above the bar.
             .padding(.bottom, 12)
+            .background(Color.mdmBackground)
             .navigationTitle("AI")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

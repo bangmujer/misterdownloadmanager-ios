@@ -3962,11 +3962,7 @@ struct StartPageView: View {
                 .padding(.horizontal, 20)
 
                 VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Favorit").font(.headline)
-                        Spacer()
-                        Text("Lihat Semua").font(.subheadline).foregroundStyle(.secondary).opacity(0)
-                    }
+                    MDMSectionHeader(title: "Favorit")
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 72), spacing: 16)], spacing: 18) {
                         ForEach(store.browserSettings.bookmarks) { mark in
                             Button {
@@ -3975,7 +3971,8 @@ struct StartPageView: View {
                                 VStack(spacing: 6) {
                                     FaviconView(host: URL(string: mark.urlString)?.host ?? "", size: 44)
                                         .padding(10)
-                                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+                                        .background(Color.mdmSurfaceMuted, in: RoundedRectangle(cornerRadius: 14))
+                                        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.mdmBorder, lineWidth: 1))
                                     Text(mark.title).font(.caption).lineLimit(1)
                                 }
                             }

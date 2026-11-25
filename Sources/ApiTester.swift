@@ -44,6 +44,12 @@ enum ApiAuthKind: String, CaseIterable, Codable {
     }
 }
 
+/// Auth block metadata. The kind, the Basic username, and the API-key
+/// header name stay in the request JSON; the password, bearer token, and
+/// key value live in the Keychain (see `ApiAuthSecrets` / `MDMSecrets`).
+/// `password`, `token`, and `key` below are legacy decode-only holders:
+/// old files decode through them once for the Keychain migration, and
+/// they stay empty at rest afterwards. Never read them when sending.
 struct ApiAuth: Codable, Equatable {
     var kind: ApiAuthKind = .none
     var username = ""
@@ -128,6 +134,13 @@ final class ApiTesterStore: ObservableObject {
         if let data = try? Data(contentsOf: fileURL),
            let decoded = try? JSONDecoder().decode([ApiRequest].self, from: data) {
             saved = decoded
+            // S4: plaintext auth secrets from older saves move to the
+            // Keychain once (keyed by each request's stable id).
+            var migrated = false
+            for i in saved.indices {
+                if MDMSecrets.migrateApiRequest(&saved[i]) { migrated = true }
+            }
+            if migrated { save() }
         }
     }
 
@@ -164,7 +177,12 @@ final class ApiTesterStore: ObservableObject {
 // MARK: - Sending
 
 extension ApiTesterView {
-    static func send(_ request: ApiRequest) async -> ApiResponse {
+    /// Sends a request. `secrets` is the in-memory auth secret the view is
+    /// editing; when nil (the AI agent tool path) the secret is loaded
+    /// from the Keychain by the request's id. The plaintext fields on
+    /// `ApiAuth` are never read here — they are legacy decode holders.
+    static func send(_ request: ApiRequest, secrets: ApiAuthSecrets? = nil) async -> ApiResponse {
+        let secrets = secrets ?? MDMSecrets.loadApiSecrets(for: request.id)
         var urlString = request.url.trimmingCharacters(in: .whitespacesAndNewlines)
         if !urlString.contains("://") { urlString = "https://" + urlString }
         guard var components = URLComponents(string: urlString) else {
@@ -184,13 +202,13 @@ extension ApiTesterView {
         // Auth first, then the user's own headers win on duplicates.
         switch request.auth.kind {
         case .basic:
-            let creds = Data("\(request.auth.username):\(request.auth.password)".utf8).base64EncodedString()
+            let creds = Data("\(request.auth.username):\(secrets.password)".utf8).base64EncodedString()
             urlRequest.setValue("Basic \(creds)", forHTTPHeaderField: "Authorization")
         case .bearer:
-            urlRequest.setValue("Bearer \(request.auth.token)", forHTTPHeaderField: "Authorization")
+            urlRequest.setValue("Bearer \(secrets.token)", forHTTPHeaderField: "Authorization")
         case .apiKey:
             if !request.auth.headerName.isEmpty {
-                urlRequest.setValue(request.auth.key, forHTTPHeaderField: request.auth.headerName)
+                urlRequest.setValue(secrets.key, forHTTPHeaderField: request.auth.headerName)
             }
         case .none:
             break
@@ -268,13 +286,13 @@ extension ApiTesterView {
         "\(code) \(HTTPURLResponse.localizedString(forStatusCode: code))"
     }
 
-    static func statusTint(_ code: Int?) -> Color {
-        guard let code else { return .gray }
+    static func statusTone(_ code: Int?) -> MDMStatusTone {
+        guard let code else { return .muted }
         switch code {
-        case 200..<300: return .green
-        case 300..<400: return .blue
-        case 400..<500: return .orange
-        default: return .red
+        case 200..<300: return .success
+        case 300..<400: return .accent
+        case 400..<500: return .warning
+        default: return .error
         }
     }
 }
@@ -285,12 +303,19 @@ struct ApiTesterView: View {
     @EnvironmentObject var store: DownloadStore
     @StateObject private var apiStore = ApiTesterStore()
     @State private var draft: ApiRequest
+    @State private var secretDraft = ApiAuthSecrets()
     @State private var response: ApiResponse?
     @State private var sending = false
     @State private var sendTask: Task<Void, Never>?
 
     init() {
         _draft = State(initialValue: ApiRequest.fresh(number: 1))
+    }
+
+    /// Loads the Keychain secret for the draft being edited. Called
+    /// whenever the draft is replaced (open, history tap, "Baru").
+    private func refreshSecrets() {
+        secretDraft = MDMSecrets.loadApiSecrets(for: draft.id)
     }
 
     var body: some View {
@@ -317,10 +342,13 @@ struct ApiTesterView: View {
                         sending = false
                         response = nil
                         draft = ApiRequest.fresh(number: apiStore.nextNumber)
+                        secretDraft = ApiAuthSecrets()
                     }
                 }
             }
-            .onAppear { store.apiTester = apiStore }
+            .onAppear { store.apiTester = apiStore; refreshSecrets() }
+            .scrollContentBackground(.hidden)
+            .background(Color.mdmBackground)
     }
 
     // MARK: Sections
@@ -379,20 +407,34 @@ struct ApiTesterView: View {
                 TextField("Username", text: $draft.auth.username)
                     .autocapitalization(.none)
                     .autocorrectionDisabled()
-                SecureField("Password", text: $draft.auth.password)
+                SecureField("Password", text: Binding(get: { secretDraft.password }, set: { secretDraft.password = $0 }))
             case .bearer:
-                SecureField("Token", text: $draft.auth.token)
+                SecureField("Token", text: Binding(get: { secretDraft.token }, set: { secretDraft.token = $0 }))
                     .autocapitalization(.none)
                     .autocorrectionDisabled()
             case .apiKey:
                 TextField("Nama header", text: $draft.auth.headerName)
                     .autocapitalization(.none)
                     .autocorrectionDisabled()
-                SecureField("API key", text: $draft.auth.key)
+                SecureField("API key", text: Binding(get: { secretDraft.key }, set: { secretDraft.key = $0 }))
                     .autocapitalization(.none)
                     .autocorrectionDisabled()
             case .none:
                 EmptyView()
+            }
+            if draft.auth.kind != .none {
+                if !secretDraft.isEmpty {
+                    Text("Rahasia tersimpan di Keychain dan tidak pernah ditampilkan. Mengosongkan kolom lalu mengirim akan menghapusnya.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Hapus rahasia tersimpan", role: .destructive) {
+                        secretDraft = ApiAuthSecrets()
+                        MDMSecrets.deleteApiSecrets(for: draft.id)
+                    }
+                    .font(.subheadline)
+                } else {
+                    Text("Rahasia disimpan di Keychain saat request dikirim, tidak pernah di file JSON.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -428,16 +470,8 @@ struct ApiTesterView: View {
                     }
                 }
             } else {
-                Button {
+                MDMPrimaryButton(title: "Kirim", systemImage: "play.fill") {
                     sendTapped()
-                } label: {
-                    HStack {
-                        Spacer()
-                        Image(systemName: "play.fill")
-                        Text("Kirim")
-                            .bold()
-                        Spacer()
-                    }
                 }
                 .disabled(draft.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
@@ -451,9 +485,7 @@ struct ApiTesterView: View {
                     .foregroundStyle(.red)
             } else if let status = response.status {
                 HStack(spacing: 8) {
-                    Text(Self.statusText(status))
-                        .font(.subheadline).bold()
-                        .foregroundStyle(Self.statusTint(status))
+                    MDMStatusBadge(text: Self.statusText(status), tone: Self.statusTone(status))
                     Spacer()
                     Text("\(response.durationMs) ms")
                         .font(.caption).foregroundStyle(.secondary)
@@ -497,6 +529,7 @@ struct ApiTesterView: View {
                     sending = false
                     response = nil
                     draft = saved
+                    refreshSecrets()
                 } label: {
                     HStack(spacing: 8) {
                         Text(saved.method.rawValue)
@@ -512,9 +545,7 @@ struct ApiTesterView: View {
                         }
                         Spacer()
                         if let last = saved.lastResponse, let status = last.status {
-                            Text("\(status)")
-                                .font(.caption).bold()
-                                .foregroundStyle(Self.statusTint(status))
+                            MDMStatusBadge(text: "\(status)", tone: Self.statusTone(status))
                         }
                     }
                 }
@@ -549,12 +580,14 @@ struct ApiTesterView: View {
     private func sendTapped() {
         sendTask?.cancel()
         let request = draft
+        let secrets = secretDraft
         sendTask = Task {
             sending = true
             response = nil
-            let result = await Self.send(request)
+            let result = await Self.send(request, secrets: secrets)
             sending = false
             response = result
+            MDMSecrets.saveApiSecrets(secrets, for: request.id)
             var updated = request
             updated.lastResponse = ApiLastResponse(
                 status: result.status,

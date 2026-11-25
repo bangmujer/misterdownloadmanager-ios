@@ -147,6 +147,10 @@ struct SettingsView: View {
     var showsDoneButton: Bool = true
     @State private var cacheBytes: Int64 = 0
     @State private var cacheMessage: String?
+    @State private var editingDebrid: DebridService?
+    @State private var debridDraft = ""
+    @State private var debridTick = 0
+    @State private var remoteToken = ""
     var body: some View {
         // In the tab bar the system (Lainnya overflow) navigation
         // already provides the bar — a second NavigationStack here
@@ -202,12 +206,10 @@ struct SettingsView: View {
                     Text("Menghapus sisa file sementara (.part dan potongan segmen) dari download yang sudah dihapus atau selesai. File .part milik download yang masih antre, jeda, atau gagal dipertahankan agar bisa dilanjutkan.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Debrid — your own keys") {
-                    SecureField("Real-Debrid API key", text: $store.settings.realDebridKey)
-                    SecureField("AllDebrid API key", text: $store.settings.allDebridKey)
-                    SecureField("Premiumize API key", text: $store.settings.premiumizeKey)
-                    SecureField("TorBox token", text: $store.settings.torboxKey)
-                    SecureField("Mega-Debrid token", text: $store.settings.megaDebridKey)
-                    Text("Keys stay in this app's settings file on this device. Debrid is experimental in the desktop app too.").font(.caption).foregroundStyle(.secondary)
+                    ForEach(DebridService.allCases) { service in
+                        debridKeyRow(service)
+                    }
+                    Text("Keys live only in this device's Keychain — never in the settings file. Debrid is experimental in the desktop app too.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Jaringan") {
                     Toggle("Wi-Fi only (kill-switch approximation)", isOn: $store.settings.wifiOnly)
@@ -236,7 +238,16 @@ struct SettingsView: View {
                     Toggle("Enable remote control", isOn: $store.settings.remoteControlEnabled)
                     IntField("Port", value: $store.settings.remotePort, in: 1024...65535)
                     if let addr = store.remoteAddress { LabeledContent("Address", value: addr) }
-                    Text("Plain HTTP on trusted home Wi-Fi only, while the app is in the foreground. The desktop remote uses HTTPS pairing; that pairing flow is not ported.").font(.caption).foregroundStyle(.secondary)
+                    if !remoteToken.isEmpty {
+                        LabeledContent("Token pairing", value: String(remoteToken.prefix(8)) + "…")
+                        HStack {
+                            Button("Salin token") { UIPasteboard.general.string = remoteToken }
+                            Button("Token baru") { remoteToken = MDMSecrets.regenerateRemoteToken() }
+                        }
+                        .font(.subheadline)
+                        Text("The address above already contains the token. A browser without the correct token gets a 401. A new token takes effect immediately — reopen the address afterwards.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("Plain HTTP on trusted home Wi-Fi only, while the app is in the foreground. Requests without the pairing token are refused (401).").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Browser — Umum") {
                     Picker("Search engine", selection: $store.browserSettings.searchEngine) {
@@ -292,9 +303,52 @@ struct SettingsView: View {
                     ToolbarItem(placement: .confirmationAction) { Button("Done") { store.save(); dismiss() } }
                 }
             }
-            .onAppear { cacheBytes = store.downloadCacheSize() }
+            .onAppear { cacheBytes = store.downloadCacheSize(); remoteToken = MDMSecrets.ensureRemoteToken() }
             .onReceive(store.$settings.dropFirst()) { _ in store.save() }
             .onReceive(store.$browserSettings.dropFirst()) { _ in store.saveBrowserSettings() }
+            .scrollContentBackground(.hidden)
+            .background(Color.mdmBackground)
+    }
+
+    /// One debrid service's Keychain row: saved status + edit/save/delete.
+    /// `debridTick` is read so the row refreshes after a Keychain write.
+    private func debridKeyRow(_ service: DebridService) -> some View {
+        _ = debridTick
+        let hasKey = MDMSecrets.hasDebridKey(for: service)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(service.rawValue)
+                Spacer()
+                Text(hasKey ? "Tersimpan" : "Belum diisi")
+                    .font(.caption)
+                    .foregroundStyle(hasKey ? Color.mdmSuccess : Color.secondary)
+                if editingDebrid != service {
+                    Button("Ubah") { debridDraft = ""; editingDebrid = service }
+                        .font(.subheadline)
+                }
+            }
+            if editingDebrid == service {
+                SecureField("API key / token \(service.rawValue)", text: $debridDraft)
+                    .autocapitalization(.none)
+                    .autocorrectionDisabled()
+                HStack {
+                    Button("Simpan") {
+                        MDMSecrets.saveDebridKey(debridDraft, for: service)
+                        editingDebrid = nil; debridDraft = ""; debridTick += 1
+                    }
+                    .disabled(debridDraft.isEmpty)
+                    Button("Batal", role: .cancel) { editingDebrid = nil; debridDraft = "" }
+                    Spacer()
+                    if hasKey {
+                        Button("Hapus", role: .destructive) {
+                            MDMSecrets.deleteDebridKey(for: service)
+                            editingDebrid = nil; debridTick += 1
+                        }
+                    }
+                }
+                .font(.subheadline)
+            }
+        }
     }
 }
 
@@ -513,8 +567,26 @@ struct WQDirView: View {
     }
     private var isRoot: Bool { dir == root }
 
+    private var folderTotalBytes: Int64 {
+        items.filter { !wqIsDirectory($0) }.reduce(0) { $0 + wqFileSize($1) }
+    }
+
+    private var freeSpaceBytes: Int64 {
+        (try? FileManager.default.attributesOfFileSystem(forPath: dir.path)[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
+    }
+
     var body: some View {
         List {
+            Section {
+                HStack(spacing: 12) {
+                    MDMStatCard(icon: "folder", label: "Item", value: "\(items.count)", accent: .mdmAccent)
+                    MDMStatCard(icon: "internaldrive", label: "Ukuran", value: formatBytes(folderTotalBytes), accent: .mdmAccent2)
+                    MDMStatCard(icon: "externaldrive", label: "Kosong", value: formatBytes(freeSpaceBytes), accent: .mdmSuccess)
+                }
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 4, trailing: 16))
+                .listRowSeparator(.hidden)
+            }
             if isRoot {
                 let favorites = WQFavorites.all()
                 if !favorites.isEmpty {
@@ -526,12 +598,7 @@ struct WQDirView: View {
                 }
             }
             if items.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "folder").font(.largeTitle).foregroundStyle(.secondary)
-                    Text("Folder kosong").font(.headline)
-                    Text("File hasil download dan file yang diimpor muncul di sini.").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity).padding()
+                MDMEmptyState(icon: "folder", title: "Folder kosong", message: "File hasil download dan file yang diimpor muncul di sini.")
             }
             ForEach(items, id: \.self) { url in
                 row(url, isFavorite: false)
@@ -539,6 +606,24 @@ struct WQDirView: View {
         }
         .navigationTitle(isRoot ? "My Files" : dir.lastPathComponent)
         .searchable(text: $browser.searchText, prompt: "Cari di folder ini")
+        .scrollContentBackground(.hidden)
+        .background(Color.mdmBackground)
+        .safeAreaInset(edge: .top) {
+            if !browser.path.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        MDMChip(title: browser.location.label, selected: false) { browser.path.removeAll() }
+                        ForEach(browser.path.indices, id: \.self) { i in
+                            MDMChip(title: browser.path[i].lastPathComponent, selected: i == browser.path.count - 1) {
+                                browser.path = Array(browser.path.prefix(i + 1))
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                }
+                .background(Color.mdmBackground)
+            }
+        }
         .onChange(of: isEditing) { editing in
             // A stale selection must never block taps: leaving Edit mode clears it.
             if !editing { browser.selection.removeAll() }
@@ -670,7 +755,8 @@ struct WQDirView: View {
                 Image(systemName: browser.selection.contains(url) ? "checkmark.circle.fill" : "circle")
                     .foregroundStyle(browser.selection.contains(url) ? Color.accentColor : Color.secondary)
             }
-            Image(systemName: isDir ? "folder.fill" : iconFor(url)).foregroundStyle(.tint)
+            Image(systemName: isDir ? "folder.fill" : iconFor(url))
+                .foregroundStyle(isDir ? Color.mdmAccent : DownloadCategory.from(fileName: url.lastPathComponent, mime: nil).mdmTint)
             VStack(alignment: .leading) {
                 Text(url.lastPathComponent).lineLimit(1)
                 Text(isDir ? "Folder" : fileSize(url)).font(.caption).foregroundStyle(.secondary)
@@ -771,6 +857,8 @@ struct VideoGrabberView: View {
                 }
             }
             .navigationTitle("Video Grabber")
+            .scrollContentBackground(.hidden)
+            .background(Color.mdmBackground)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
         }
     }
@@ -838,6 +926,8 @@ struct TorrentAddView: View {
                 if !message.isEmpty { Text(message).font(.caption).foregroundStyle(.secondary) }
             }
             .navigationTitle("Add Torrent")
+            .scrollContentBackground(.hidden)
+            .background(Color.mdmBackground)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
             .fileImporter(isPresented: $showImporter, allowedContentTypes: [UTType(filenameExtension: "torrent") ?? .data], allowsMultipleSelection: false) { result in
                 if case .success(let urls) = result, let url = urls.first {

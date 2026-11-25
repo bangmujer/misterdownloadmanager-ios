@@ -2,9 +2,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Bottom tab bar (like the reference browser app): Downloads,
-/// Browser, AI chat, My Files, Settings, API Tester.
+/// Browser, AI chat, My Files, Tools. Settings and API Tester live
+/// inside Tools (Paket B, Fase 4).
 enum AppTab: Hashable {
-    case downloads, browser, ai, files, settings, api
+    case downloads, browser, ai, files, tools
 }
 
 struct ContentView: View {
@@ -14,18 +15,69 @@ struct ContentView: View {
     @State private var showingAdd = false
     @State private var showingGrabber = false
     @State private var showingTorrent = false
+    @State private var showingSettings = false
     @State private var addURLPreset = ""
     @State private var confirmDelete: DownloadItem?
 
     var body: some View {
-        // The system tab bar: on iOS 26 it renders as the floating
-        // liquid-glass pill, and long-press-drag scrubs the glass
-        // selection bubble along it (the effect in the Telegram
-        // video). The custom pill could not morph like that, and the
-        // "ghost capsule" was only ever the hidden system bar drawing
-        // behind it — with the bar visible and holding the tab items
-        // there is no ghost, and tab content is inset above it natively.
-        TabView(selection: $selectedTab) {
+        Group {
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                // iPad: sidebar navigation (Paket B). The detail column
+                // shows the same root views as the iPhone tabs.
+                NavigationSplitView {
+                    List(selection: sidebarSelection) {
+                        ForEach([AppTab.downloads, .browser, .ai, .files, .tools], id: \.self) { tab in
+                            Label(sidebarLabel(for: tab), systemImage: sidebarIcon(for: tab)).tag(tab)
+                        }
+                    }
+                    .navigationTitle("Mister Download Manager")
+                } detail: {
+                    detailView(for: selectedTab)
+                }
+            } else {
+                // The system tab bar: on iOS 26 it renders as the floating
+                // liquid-glass pill, and long-press-drag scrubs the glass
+                // selection bubble along it (the effect in the Telegram
+                // video). The custom pill could not morph like that, and the
+                // "ghost capsule" was only ever the hidden system bar drawing
+                // behind it — with the bar visible and holding the tab items
+                // there is no ghost, and tab content is inset above it natively.
+                TabView(selection: $selectedTab) {
+                    detailView(for: .downloads)
+                        .tabItem { Label("Downloads", systemImage: "arrow.down.circle") }
+                        .tag(AppTab.downloads)
+                    detailView(for: .browser)
+                        .tabItem { Label("Browser", systemImage: "globe") }
+                        .tag(AppTab.browser)
+                    detailView(for: .ai)
+                        .tabItem { Label("AI", systemImage: "sparkles") }
+                        .tag(AppTab.ai)
+                    detailView(for: .files)
+                        .tabItem { Label("My Files", systemImage: "folder") }
+                        .tag(AppTab.files)
+                    detailView(for: .tools)
+                        .tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
+                        .tag(AppTab.tools)
+                }
+            }
+        }
+        .onChange(of: store.aiHandoff) { handoff in
+            if handoff != nil { selectedTab = .ai }
+        }
+        .overlay(alignment: .top) { clipboardBanner }
+        .alert("Userscript diimpor", isPresented: Binding(get: { store.lastImportMessage != nil }, set: { if !$0 { store.lastImportMessage = nil } })) {
+            Button("OK", role: .cancel) { store.lastImportMessage = nil }
+        } message: {
+            Text(store.lastImportMessage ?? "")
+        }
+    }
+
+    /// One source for the five root views, shared by the iPhone tab bar
+    /// and the iPad sidebar detail column.
+    @ViewBuilder
+    private func detailView(for tab: AppTab) -> some View {
+        switch tab {
+        case .downloads:
             NavigationStack {
                 downloadList
                     .navigationTitle(titleForCategory)
@@ -36,43 +88,45 @@ struct ContentView: View {
                     .sheet(isPresented: $showingAdd) { AddURLView(presetURL: addURLPreset) }
                     .sheet(isPresented: $showingGrabber) { VideoGrabberView() }
                     .sheet(isPresented: $showingTorrent) { TorrentAddView() }
+                    .sheet(isPresented: $showingSettings) { SettingsView(showsDoneButton: true) }
                     .alert("Hapus download?", isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
                         Button("Hapus + file", role: .destructive) { if let it = confirmDelete { store.remove(id: it.id, deleteFile: true) } }
                         Button("Hapus dari daftar", role: .destructive) { if let it = confirmDelete { store.remove(id: it.id) } }
                         Button("Batal", role: .cancel) {}
                     }
             }
-            .tabItem { Label("Downloads", systemImage: "arrow.down.circle") }
-            .tag(AppTab.downloads)
-
+        case .browser:
             BrowserView(onExitToDownloads: { selectedTab = .downloads })
-                .tabItem { Label("Browser", systemImage: "globe") }
-                .tag(AppTab.browser)
-
+        case .ai:
             AIChatView()
-                .tabItem { Label("AI", systemImage: "sparkles") }
-                .tag(AppTab.ai)
-
+        case .files:
             DownloadedFilesView()
-                .tabItem { Label("My Files", systemImage: "folder") }
-                .tag(AppTab.files)
-
-            SettingsView(showsDoneButton: false)
-                .tabItem { Label("Settings", systemImage: "gearshape") }
-                .tag(AppTab.settings)
-
-            ApiTesterView()
-                .tabItem { Label("API Tester", systemImage: "bolt.horizontal.circle") }
-                .tag(AppTab.api)
+        case .tools:
+            NavigationStack { ToolsHubView() }
         }
-        .onChange(of: store.aiHandoff) { handoff in
-            if handoff != nil { selectedTab = .ai }
+    }
+
+    private var sidebarSelection: Binding<AppTab?> {
+        Binding(get: { selectedTab }, set: { if let tab = $0 { selectedTab = tab } })
+    }
+
+    private func sidebarLabel(for tab: AppTab) -> String {
+        switch tab {
+        case .downloads: return "Downloads"
+        case .browser: return "Browser"
+        case .ai: return "AI"
+        case .files: return "My Files"
+        case .tools: return "Tools"
         }
-        .overlay(alignment: .top) { clipboardBanner }
-        .alert("Userscript diimpor", isPresented: Binding(get: { store.lastImportMessage != nil }, set: { if !$0 { store.lastImportMessage = nil } })) {
-            Button("OK", role: .cancel) { store.lastImportMessage = nil }
-        } message: {
-            Text(store.lastImportMessage ?? "")
+    }
+
+    private func sidebarIcon(for tab: AppTab) -> String {
+        switch tab {
+        case .downloads: return "arrow.down.circle"
+        case .browser: return "globe"
+        case .ai: return "sparkles"
+        case .files: return "folder"
+        case .tools: return "wrench.and.screwdriver"
         }
     }
 
@@ -114,7 +168,7 @@ struct ContentView: View {
             }
         }
         ToolbarItem(placement: .topBarLeading) {
-            Button { selectedTab = .settings } label: { Image(systemName: "gearshape") }
+            Button { showingSettings = true } label: { Image(systemName: "gearshape") }
         }
     }
 
@@ -157,6 +211,8 @@ struct ContentView: View {
         }
         .searchable(text: $store.searchText, prompt: "Search downloads")
         .refreshable { store.checkClipboard() }
+        .scrollContentBackground(.hidden)
+        .background(Color.mdmBackground)
     }
 
     @ViewBuilder
@@ -311,6 +367,8 @@ struct AddURLView: View {
                 }
             }
             .navigationTitle("Add Download")
+            .scrollContentBackground(.hidden)
+            .background(Color.mdmBackground)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -341,7 +399,7 @@ struct AddURLView: View {
         busy = true; defer { busy = false }
         var finalURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
         if let service = debridService {
-            do { finalURL = try await DebridClient.unrestrict(finalURL, service: service, settings: store.settings) }
+            do { finalURL = try await DebridClient.unrestrict(finalURL, service: service) }
             catch { message = "Debrid gagal: \(error.localizedDescription)"; busy = false; return }
         }
         let name = fileName.isEmpty ? nil : fileName
@@ -373,6 +431,14 @@ struct DownloadDetailView: View {
 
     var body: some View {
         Form {
+            Section {
+                HStack {
+                    MDMStatusBadge(text: item.state.label, tone: detailStatusTone)
+                    Spacer()
+                    Text("\(Int(item.progress * 100))%").font(.caption.monospacedDigit())
+                }
+                MDMProgressBar(progress: item.progress, segments: item.segments, totalBytes: item.totalBytes, failed: item.state == .failed)
+            }
             Section("File") {
                 LabeledContent("Name", value: item.fileName)
                 LabeledContent("URL", value: item.url)
@@ -426,6 +492,19 @@ struct DownloadDetailView: View {
         }
         .navigationTitle(item.fileName)
         .navigationBarTitleDisplayMode(.inline)
+        .scrollContentBackground(.hidden)
+        .background(Color.mdmBackground)
+    }
+
+    private var detailStatusTone: MDMStatusTone {
+        switch item.state {
+        case .completed: return .success
+        case .failed: return .error
+        case .downloading: return .accent
+        case .paused: return .warning
+        case .queued: return .muted
+        case .verifying: return .teal
+        }
     }
 
     private func extract() {

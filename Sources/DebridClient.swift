@@ -2,7 +2,7 @@ import Foundation
 
 /// Debrid unrestricting through each service's official API, using the user's own key.
 /// Mirrors MDM's debrid crate (Real-Debrid, AllDebrid, Premiumize, TorBox, Mega-Debrid).
-/// Keys are stored only in the app's own settings file; nothing is sent anywhere else.
+/// Keys live only in the device Keychain (see MDMSecrets); nothing is sent anywhere else.
 enum DebridService: String, CaseIterable, Identifiable {
     case realDebrid = "Real-Debrid"
     case allDebrid = "AllDebrid"
@@ -13,19 +13,13 @@ enum DebridService: String, CaseIterable, Identifiable {
 }
 
 enum DebridClient {
-    static func key(for service: DebridService, settings: AppSettings) -> String {
-        switch service {
-        case .realDebrid: return settings.realDebridKey
-        case .allDebrid: return settings.allDebridKey
-        case .premiumize: return settings.premiumizeKey
-        case .torbox: return settings.torboxKey
-        case .megaDebrid: return settings.megaDebridKey
-        }
+    static func key(for service: DebridService) -> String {
+        MDMSecrets.debridKey(for: service)
     }
 
     /// Returns a direct download URL for a file-host link, or throws with the service's message.
-    static func unrestrict(_ link: String, service: DebridService, settings: AppSettings) async throws -> String {
-        let key = key(for: service, settings: settings).trimmingCharacters(in: .whitespacesAndNewlines)
+    static func unrestrict(_ link: String, service: DebridService) async throws -> String {
+        let key = key(for: service).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw NSError(domain: "MDMDebrid", code: 401, userInfo: [NSLocalizedDescriptionKey: "Masukkan API key \(service.rawValue) dulu di Pengaturan → Debrid."]) }
         guard let linkURL = URL(string: link) else { throw NSError(domain: "MDMDebrid", code: 400, userInfo: [NSLocalizedDescriptionKey: "Link tidak valid."]) }
 
