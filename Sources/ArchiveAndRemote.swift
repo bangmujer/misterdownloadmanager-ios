@@ -67,6 +67,12 @@ final class RemoteServer {
     /// touch the store's @Published state).
     private var shareBaseDir: URL?
 
+    /// @MainActor: DownloadStore is main-actor-isolated, so reading
+    /// `store.downloadsDir` here needs this context (run #172 failed
+    /// without it: "main actor-isolated property 'downloadsDir' can not
+    /// be referenced from a nonisolated context"). Call sites are
+    /// MDMApp onAppear/onChange — already on the main actor.
+    @MainActor
     func start(store: DownloadStore, port: UInt16) {
         self.store = store
         shareBaseDir = store.downloadsDir
