@@ -18,6 +18,19 @@ final class DownloadStore: ObservableObject {
     @Published var selectedCategory: DownloadCategory = .all
     @Published var searchText = ""
     @Published var pendingClipboardURL: String?
+    /// Latest valid link seen on the pasteboard (drives the "+" menu's
+    /// "Add from Clipboard" row). Reading the pasteboard from a view
+    /// body would re-trigger the iOS "Pasted from …" banner on every
+    /// redraw, so views read this state instead of UIPasteboard.
+    @Published var lastClipboardURL: String?
+    /// Pasteboard changeCount last acted on. changeCount is metadata:
+    /// reading it never triggers the iOS paste banner, so the 3-second
+    /// timer only touches the real pasteboard content when something
+    /// was actually copied since the last check.
+    private var lastClipboardChangeCount: Int?
+    /// Links already offered once this launch. The in-app clipboard
+    /// banner appears only the first time each link is seen.
+    private var offeredClipboardURLs: Set<String> = []
     @Published var remoteAddress: String?
     @Published var lastError: String?
     @Published var browserSettings = BrowserSettings()
@@ -649,9 +662,15 @@ final class DownloadStore: ObservableObject {
 
     func checkClipboard() {
         guard settings.clipboardMonitor else { return }
+        let currentCount = UIPasteboard.general.changeCount
+        guard currentCount != lastClipboardChangeCount else { return }
+        lastClipboardChangeCount = currentCount
         guard let text = UIPasteboard.general.string?.trimmingCharacters(in: .whitespacesAndNewlines),
               text.hasPrefix("http"), URL(string: text) != nil,
               !items.contains(where: { $0.url == text }) else { return }
+        lastClipboardURL = text
+        guard !offeredClipboardURLs.contains(text) else { return }
+        offeredClipboardURLs.insert(text)
         if pendingClipboardURL != text { pendingClipboardURL = text }
     }
 

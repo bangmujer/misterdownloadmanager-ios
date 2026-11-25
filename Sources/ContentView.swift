@@ -145,8 +145,8 @@ struct ContentView: View {
                 Button { addURLPreset = ""; showingAdd = true } label: { Label("Add URL…", systemImage: "link") }
                 Button { showingTorrent = true } label: { Label("Add Torrent…", systemImage: "magnet") }
                 Button { showingGrabber = true } label: { Label("Grab Video from Page…", systemImage: "play.rectangle") }
-                if let clip = UIPasteboard.general.string, clip.hasPrefix("http") {
-                    Button { addURLPreset = clip; showingAdd = true } label: { Label("Add from Clipboard", systemImage: "doc.on.clipboard") }
+                if let clip = store.lastClipboardURL {
+                    Button { addURLPreset = clip; store.pendingClipboardURL = nil; showingAdd = true } label: { Label("Add from Clipboard", systemImage: "doc.on.clipboard") }
                 }
             } label: { Image(systemName: "plus") }
         }
