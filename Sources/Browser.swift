@@ -4659,8 +4659,18 @@ struct TabOverviewView: View {
             }
             .navigationDestination(for: OverviewDestination.self) { dest in
                 switch dest {
-                case .group(let id): GroupDetailView(session: session, groupID: id)
-                case .inactive: InactiveTabsView(session: session)
+                // The detail views are pushed onto this stack: their own
+                // dismiss() only pops back to the grid, so tab selection
+                // must close the whole overview cover via THIS view's
+                // dismiss (the cover root), or the tap looks dead.
+                case .group(let id): GroupDetailView(session: session, groupID: id) { tabID in
+                    session.select(tabID)
+                    dismiss()
+                }
+                case .inactive: InactiveTabsView(session: session) { tabID in
+                    session.select(tabID)
+                    dismiss()
+                }
                 }
             }
             .sheet(isPresented: $showingNewGroup) { newGroupSheet }
@@ -5163,6 +5173,12 @@ struct GroupRowView: View {
 struct GroupDetailView: View {
     @ObservedObject var session: BrowserSession
     var groupID: UUID
+    /// Selecting a tab must close the whole overview cover. This view's
+    /// own dismiss() only pops the navigation stack back to the grid,
+    /// which made taps on member cards look dead (select ran, but the
+    /// cover stayed open). The overview root supplies this closure so
+    /// selection dismisses the cover itself.
+    var onSelectTab: (UUID) -> Void
     @Environment(\.dismiss) var dismiss
     @State private var showingRename = false
     @State private var showingAddTabs = false
@@ -5199,8 +5215,7 @@ struct GroupDetailView: View {
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
                         ForEach(session.tabs(in: group)) { tab in
                             TabCardView(session: session, tab: tab) {
-                                session.select(tab.id)
-                                dismiss()
+                                onSelectTab(tab.id)
                             }
                         }
                     }
@@ -5305,15 +5320,16 @@ struct GroupDetailView: View {
 
 struct InactiveTabsView: View {
     @ObservedObject var session: BrowserSession
-    @Environment(\.dismiss) var dismiss
+    /// Same cover-dismiss rule as GroupDetailView: this view is pushed
+    /// onto the overview stack, so its own dismiss() would only pop.
+    var onSelectTab: (UUID) -> Void
 
     var body: some View {
         List {
             Section {
                 ForEach(session.inactiveTabs) { tab in
                     Button {
-                        session.select(tab.id)
-                        dismiss()
+                        onSelectTab(tab.id)
                     } label: {
                         HStack(spacing: 10) {
                             FaviconView(host: tab.host, size: 26)
