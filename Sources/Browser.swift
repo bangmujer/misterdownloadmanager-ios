@@ -389,6 +389,27 @@ enum AdBlockRules {
         "criteo.com", "taboola.com", "outbrain.com",
     ]
 
+    /// Ad domains the bundled Ghostery snapshot (2026-11-22) does not
+    /// cover as network blocks: a live check of fdown.net found an ad
+    /// iframe served from googleads.g.doubleclick.net, and the snapshot
+    /// only blocks ad/fls/td.doubleclick.net subdomains — no generic
+    /// doubleclick.net rule and no g.doubleclick.net rule. These are
+    /// applied as always-on dynamic rules (not the builtin fallback,
+    /// which only loads if every Ghostery chunk fails to compile).
+    static let extraAdDomains: [String] = [
+        "doubleclick.net", "googlesyndication.com", "googleadservices.com",
+        "adservice.google.com", "googletagservices.com",
+    ]
+
+    /// Cosmetic selectors for ad iframes, hidden whatever domain serves
+    /// them: the fdown.net ad is an <iframe name="Advertisement">, and
+    /// the snapshot only has title-based iframe selectors.
+    static let adIframeSelectors: [String] = [
+        "iframe[name=\"Advertisement\"]", "iframe[name=\"advertisement\"]",
+        "iframe[src*=\"doubleclick.net\"]", "iframe[src*=\"googlesyndication.com\"]",
+        "iframe[src*=\"googleadservices.com\"]", "div[id^=\"google_ads\"]",
+    ]
+
     static func escapeRegex(_ s: String) -> String {
         let specials = "\\.^$|?*+()[]{}"
         return s.map { specials.contains($0) ? "\\\($0)" : String($0) }.joined()
@@ -428,6 +449,22 @@ enum AdBlockRules {
         if settings.customAdBlockEnabled {
             for line in settings.customBlockFilters {
                 if let r = regex(for: line) { rules.append(blockRule(pattern: r)) }
+            }
+        }
+        // Hardened ad-domain blocks + ad-iframe hiding (see
+        // extraAdDomains/adIframeSelectors). Unlike blockRule above,
+        // these also cover document/popup loads so ad iframes and
+        // popups are stopped, not just their scripts and images.
+        if settings.adBlockEnabled {
+            for domain in extraAdDomains {
+                let pattern = ".*://([^/]*\\.)?" + escapeRegex(domain) + "([/?#].*)?$"
+                rules.append(["trigger": ["url-filter": pattern,
+                                          "resource-type": ["document", "script", "image", "xmlhttprequest", "media", "font", "websocket", "popup", "style-sheet"]],
+                              "action": ["type": "block"]])
+            }
+            for selector in adIframeSelectors {
+                rules.append(["trigger": ["url-filter": ".*"],
+                              "action": ["type": "css-display-none", "selector": selector]])
             }
         }
         // Strict tracking protection: block known trackers, but only
