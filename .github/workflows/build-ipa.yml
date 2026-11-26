@@ -5,9 +5,15 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-ipa:
     runs-on: macos-15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Select latest Xcode
@@ -34,3 +40,12 @@ jobs:
           name: misterdownloadmanager-ios-unsigned-ipa
           path: build/ipa/*.ipa
           retention-days: 30
+      - name: Publish rolling release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view latest >/dev/null 2>&1; then
+            gh release create latest --title "Latest build" --notes "Rolling build from main." --prerelease
+          fi
+          gh release upload latest build/ipa/misterdownloadmanager-unsigned.ipa --clobber
