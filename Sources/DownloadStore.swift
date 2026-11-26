@@ -481,7 +481,13 @@ final class DownloadStore: ObservableObject {
                             // no extension, e.g. a CDN object id) or
                             // nothing at all.
                             let currentExt = ($0.fileName as NSString).pathExtension
-                            if $0.fileName == "download" || $0.fileName.isEmpty || currentExt.isEmpty {
+                            // An opaque id WITH an extension (e.g. a GitHub
+                            // artifact storage hash like b1dab676…299a1927f6d.zip)
+                            // is just as unusable as no name at all: the
+                            // server's declared filename wins for it too.
+                            let stem = ($0.fileName as NSString).deletingPathExtension
+                            let looksLikeOpaqueID = stem.count >= 32 && stem.allSatisfy(\.isHexDigit)
+                            if $0.fileName == "download" || $0.fileName.isEmpty || currentExt.isEmpty || looksLikeOpaqueID {
                                 $0.fileName = cdName
                             }
                         }

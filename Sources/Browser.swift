@@ -672,7 +672,7 @@ final class BrowserSession: ObservableObject {
     // History recording (set by the browser view; skipped for private tabs).
     var onHistoryRecord: ((String, String) -> Void)?
     private var lastHistoryURL: [UUID: String] = [:]
-    var onDownloadCaptured: ((URL) -> Void)?
+    var onDownloadCaptured: ((URL, String?) -> Void)?
     var onMediaFound: (([URL]) -> Void)?
     // Link long-press menu actions (set by the browser view).
     var onBookmarkAdd: ((String, String) -> Void)?
@@ -2553,10 +2553,18 @@ struct BrowserWebView: UIViewRepresentable {
                      decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
             let downloadExts = ["zip", "rar", "7z", "apk", "ipa", "dmg", "exe", "msi", "pkg", "iso", "torrent", "mp4", "mkv", "mov", "mp3", "flac", "epub"]
             var isDownload = false
+            var suggestedName: String?
             if let http = navigationResponse.response as? HTTPURLResponse,
-               let disp = http.value(forHTTPHeaderField: "Content-Disposition"),
-               disp.lowercased().contains("attachment") {
-                isDownload = true
+               let disp = http.value(forHTTPHeaderField: "Content-Disposition") {
+                if disp.lowercased().contains("attachment") { isDownload = true }
+                // The final response of a redirect chain (e.g. a GitHub
+                // Actions artifact download) carries the real filename
+                // here, while the URL itself is an opaque storage id.
+                // Pass it through so the queue shows the real name.
+                if let name = DownloadEngine.fileNameFromContentDisposition(disp) {
+                    let cleaned = DownloadStore.cleanFileName(name)
+                    if cleaned != "download" { suggestedName = cleaned }
+                }
             }
             let mime = navigationResponse.response.mimeType ?? ""
             if let url = navigationResponse.response.url {
@@ -2582,7 +2590,7 @@ struct BrowserWebView: UIViewRepresentable {
                 "application/x-executable"]
             if downloadMimes.contains(mime) { isDownload = true }
             if isDownload, let url = navigationResponse.response.url {
-                session.onDownloadCaptured?(url)
+                session.onDownloadCaptured?(url, suggestedName)
                 decisionHandler(.cancel)
             } else {
                 decisionHandler(.allow)
@@ -2711,7 +2719,7 @@ struct BrowserWebView: UIViewRepresentable {
                     self.session.newTab(url: linkURL, isIncognito: true)
                 }
                 let download = UIAction(title: "Unduh File Tertaut", image: UIImage(systemName: "arrow.down.circle")) { _ in
-                    self.session.onDownloadCaptured?(linkURL)
+                    self.session.onDownloadCaptured?(linkURL, nil)
                 }
                 let copy = UIAction(title: "Salin Link", image: UIImage(systemName: "link")) { _ in
                     UIPasteboard.general.url = linkURL
@@ -3184,8 +3192,8 @@ struct BrowserView: View {
             // measured stack height (see refreshBottomInset).
             bottomSafeInset = geo.safeAreaInsets.bottom
             refreshBottomInset()
-            session.onDownloadCaptured = { url in
-                let item = store.addItem(urlString: url.absoluteString)
+            session.onDownloadCaptured = { url, suggestedName in
+                let item = store.addItem(urlString: url.absoluteString, fileName: suggestedName)
                 capturedNotice = item == nil ? "Link captured, but the URL was rejected." : "Download added: \(item?.fileName ?? url.lastPathComponent)"
             }
             session.onMediaFound = { urls in
@@ -3590,7 +3598,23 @@ struct BrowserView: View {
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 11)
-        .background(.ultraThinMaterial, in: Capsule())
+        .background {
+            ZStack {
+                Capsule().fill(.ultraThinMaterial)
+                // Page-load progress lives INSIDE the pill: an accent
+                // fill sweeping left to right behind the address text,
+                // replacing the old 2.5pt line under the pill.
+                GeometryReader { geo in
+                    if let tab = session.selectedTab, tab.isLoading {
+                        Capsule()
+                            .fill(Color.accentColor.opacity(0.3))
+                            .frame(width: max(0, geo.size.width * CGFloat(tab.progress)), height: geo.size.height)
+                            .animation(.easeOut(duration: 0.2), value: tab.progress)
+                    }
+                }
+            }
+            .clipShape(Capsule())
+        }
         .contextMenu {
             if let tab = session.selectedTab, let url = URL(string: tab.urlString), url.scheme != nil {
                 Button { UIPasteboard.general.url = url } label: {
@@ -3599,17 +3623,6 @@ struct BrowserView: View {
                 ShareLink(item: url) { Label("Bagikan…", systemImage: "square.and.arrow.up") }
                 Button { session.newTab(url: url) } label: {
                     Label("Buka di Tab Baru", systemImage: "plus.square.on.square")
-                }
-            }
-        }
-        .overlay(alignment: .bottomLeading) {
-            GeometryReader { geo in
-                if let tab = session.selectedTab, tab.isLoading {
-                    Capsule()
-                        .fill(Color.accentColor)
-                        .frame(width: max(0, geo.size.width * CGFloat(tab.progress)), height: 2.5)
-                        .padding(.bottom, 1)
-                        .clipShape(Capsule())
                 }
             }
         }
