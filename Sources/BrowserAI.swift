@@ -517,7 +517,11 @@ struct AIAttachment: Equatable, Codable {
     private static func extractVideo(fileName: String, mimeType: String, byteCount: Int, sourceURL: URL, tempCopy: URL?) async -> AIAttachment {
         defer { if let tempCopy { try? FileManager.default.removeItem(at: tempCopy) } }
         let asset = AVAsset(url: sourceURL)
-        let durationSeconds: Double = (try? await asset.load(.duration)).map { $0.seconds }.filter { $0.isFinite && $0 > 0 } ?? 0
+        var durationSeconds: Double = 0
+        if let loaded = try? await asset.load(.duration) {
+            let seconds = loaded.seconds
+            if seconds.isFinite && seconds > 0 { durationSeconds = seconds }
+        }
         var frames: [Data] = []
         if durationSeconds > 0 {
             let count = 6
