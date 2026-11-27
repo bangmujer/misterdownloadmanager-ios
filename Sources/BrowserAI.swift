@@ -361,11 +361,12 @@ struct AIAttachment: Equatable, Codable {
         return text
     }
 
-    /// Text/code entries of a ZIP, bounded like the downloaders'
-    /// prompt folding: at most 100 entries, 256 KB per entry, 8.000
-    /// characters total. Binary entries and entries that fail to
-    /// decode are skipped; a ZIP with no readable entries yields nil
-    /// and the caller falls back to the name-and-size note.
+    /// Text/code entries of a ZIP, bounded like a plain text file:
+    /// at most 100 entries, 256 KB per entry, 60.000 characters
+    /// total — the same ceiling as a single text attachment, so a
+    /// normal-size ZIP is never cut. Binary entries and entries that
+    /// fail to decode are skipped; a ZIP with no readable entries
+    /// yields nil and the caller falls back to the name-and-size note.
     private func zipTextContents() -> String? {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("mdm-zip-\(UUID().uuidString).zip")
@@ -388,8 +389,8 @@ struct AIAttachment: Equatable, Codable {
                       !text.contains("\0") else { continue }
                 count += 1
                 out += "\n=== \(entry.path) ===\n" + text
-                if out.count > 8_000 {
-                    out = String(out.prefix(8_000)) + "\n... (dipotong — isi ZIP lebih panjang dari ini)"
+                if out.count > 60_000 {
+                    out = String(out.prefix(60_000)) + "\n... (dipotong — isi ZIP lebih panjang dari ini)"
                     break
                 }
             }
