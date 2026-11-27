@@ -5,6 +5,8 @@ import UIKit
 import PhotosUI
 import UniformTypeIdentifiers
 import ZIPFoundation
+import AVFoundation
+import Speech
 
 // MARK: - Ask AI providers
 //
@@ -334,14 +336,80 @@ struct AIAttachment: Equatable, Codable {
     var mimeType: String
     var data: Data
     var isImage: Bool
+    /// Sampled frames of a video attachment (JPEG thumbnails), one per
+    /// segment, so the model can "watch" the video. The video bytes
+    /// themselves are NOT kept: only these frames ride in the request.
+    /// Defaulted so attachments saved before video support still decode.
+    var videoFrames: [Data] = []
+    var videoDurationSeconds: Double = 0
+    /// Transcript of the video's audio track (first 90 seconds), when
+    /// speech recognition could produce one. Plain text, so it reaches
+    /// the model even on gateways that reject image parts.
+    var videoTranscript: String = ""
+    /// Original video file size, for the chip label (data stays empty
+    /// for videos).
+    var videoByteCount: Int = 0
 
     var displaySize: String {
-        let kb = Double(data.count) / 1024
-        if kb < 1024 { return String(format: "%.0f KB", kb) }
-        return String(format: "%.1f MB", kb / 1024)
+        let bytes = isVideo ? videoByteCount : data.count
+        let size: String
+        let kb = Double(bytes) / 1024
+        if kb < 1024 { size = String(format: "%.0f KB", kb) }
+        else { size = String(format: "%.1f MB", kb / 1024) }
+        if isVideo, videoDurationSeconds > 0 {
+            return "\(size) · \(Self.formatDuration(videoDurationSeconds))"
+        }
+        return size
     }
 
     var isPDF: Bool { mimeType == "application/pdf" }
+
+    var isVideo: Bool {
+        mimeType.hasPrefix("video/") || Self.videoExtensions.contains((fileName as NSString).pathExtension.lowercased())
+    }
+
+    static func isVideoFile(fileName: String) -> Bool {
+        videoExtensions.contains((fileName as NSString).pathExtension.lowercased())
+    }
+
+    private static let videoExtensions: Set<String> = ["mp4", "mov", "m4v", "mkv", "webm", "avi", "mpeg", "mpg"]
+
+    /// Image parts the model sees for this attachment: the photo
+    /// itself, or one frame per video segment.
+    var visualParts: [(mimeType: String, data: Data)] {
+        if isImage { return [(mimeType, data)] }
+        if isVideo { return videoFrames.map { ("image/jpeg", $0) } }
+        return []
+    }
+
+    /// The note appended to the message text for a video: segment
+    /// timestamps (so the frames carry times) plus the audio
+    /// transcript when one was produced.
+    var videoSegmentNote: String {
+        var lines = ["Lampiran video \(fileName) (durasi \(Self.formatDuration(videoDurationSeconds)))."]
+        let segmentCount = videoFrames.count
+        if videoDurationSeconds > 0, segmentCount > 0 {
+            let segLen = videoDurationSeconds / Double(segmentCount)
+            lines.append("Video dibagi \(segmentCount) segmen; satu frame dari tiap segmen terlampir sebagai gambar:")
+            for i in 0..<segmentCount {
+                let start = Self.formatDuration(Double(i) * segLen)
+                let end = Self.formatDuration(Double(i + 1) * segLen)
+                lines.append("- Segmen \(i + 1): \(start)–\(end)")
+            }
+            lines.append("Jelaskan isi tiap segmen dengan waktunya.")
+        } else {
+            lines.append("Frame video terlampir sebagai gambar — jelaskan isinya.")
+        }
+        if !videoTranscript.isEmpty {
+            lines.append("Transkrip audio (90 detik pertama):\n\(videoTranscript)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    static func formatDuration(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        return "\(total / 60):\(String(format: "%02d", total % 60))"
+    }
 
     var isZip: Bool {
         mimeType == "application/zip" || (fileName as NSString).pathExtension.lowercased() == "zip"
@@ -402,12 +470,146 @@ struct AIAttachment: Equatable, Codable {
     }
 
     static func fromPickedData(fileName: String, data: Data) -> AIAttachment {
+        // Videos never ride as raw bytes: they go through the async
+        // frame sampler (fromVideoData/fromVideoFile). A video that
+        // reaches here anyway becomes a placeholder with only its
+        // size, so multi-megabyte video bytes never land in the
+        // persisted chat JSON.
+        if isVideoFile(fileName: fileName) {
+            let mime = UTType(filenameExtension: (fileName as NSString).pathExtension)?.preferredMIMEType ?? "video/mp4"
+            return AIAttachment(fileName: fileName, mimeType: mime, data: Data(), isImage: false, videoByteCount: data.count)
+        }
         if let image = UIImage(data: data) {
             return AIAttachment(fileName: fileName, mimeType: "image/jpeg", data: downscaledJPEG(image), isImage: true)
         }
         let ext = (fileName as NSString).pathExtension.lowercased()
         let mime = UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
         return AIAttachment(fileName: fileName, mimeType: mime, data: data, isImage: false)
+    }
+
+    /// Build a video attachment from a file URL (photo-library pick):
+    /// samples one frame per segment and transcribes the audio track.
+    /// The caller owns the URL and deletes it afterwards when it is a
+    /// picker temp copy.
+    static func fromVideoFile(fileName: String, url: URL) async -> AIAttachment {
+        let byteCount = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        let mime = UTType(filenameExtension: (fileName as NSString).pathExtension)?.preferredMIMEType ?? "video/mp4"
+        return await extractVideo(fileName: fileName, mimeType: mime, byteCount: byteCount, sourceURL: url, tempCopy: nil)
+    }
+
+    /// Build from in-memory bytes (Files picker): the bytes are
+    /// written to a temp file for AVFoundation, then deleted.
+    static func fromVideoData(fileName: String, mimeType: String, data: Data) async -> AIAttachment {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mdm-video-\(UUID().uuidString).\((fileName as NSString).pathExtension)")
+        do {
+            try data.write(to: tmp)
+        } catch {
+            return AIAttachment(fileName: fileName, mimeType: mimeType, data: Data(), isImage: false, videoByteCount: data.count)
+        }
+        return await extractVideo(fileName: fileName, mimeType: mimeType, byteCount: data.count, sourceURL: tmp, tempCopy: tmp)
+    }
+
+    /// Samples up to 6 frames across the video plus a transcript of
+    /// the first 90 seconds of audio. Every step is best-effort: a
+    /// video with no readable frames still yields an attachment with
+    /// its name, size and duration, never a failure.
+    private static func extractVideo(fileName: String, mimeType: String, byteCount: Int, sourceURL: URL, tempCopy: URL?) async -> AIAttachment {
+        defer { if let tempCopy { try? FileManager.default.removeItem(at: tempCopy) } }
+        let asset = AVAsset(url: sourceURL)
+        let durationSeconds: Double = (try? await asset.load(.duration)).map { $0.seconds }.filter { $0.isFinite && $0 > 0 } ?? 0
+        var frames: [Data] = []
+        if durationSeconds > 0 {
+            let count = 6
+            let generator = AVAssetImageGenerator(asset: asset)
+            generator.appliesPreferredTrackTransform = true
+            generator.maximumSize = CGSize(width: 640, height: 640)
+            for i in 0..<count {
+                let time = CMTime(seconds: (Double(i) + 0.5) * durationSeconds / Double(count), preferredTimescale: 600)
+                let cgImage = await withCheckedContinuation { (cont: CheckedContinuation<CGImage?, Never>) in
+                    generator.generateCGImageAsynchronously(for: time) { image, _, _ in
+                        cont.resume(returning: image)
+                    }
+                }
+                guard let cgImage, let jpeg = downscaledVideoFrame(UIImage(cgImage: cgImage)) else { continue }
+                frames.append(jpeg)
+            }
+        }
+        let transcript = await transcribeVideoAudio(asset: asset, durationSeconds: durationSeconds)
+        return AIAttachment(fileName: fileName, mimeType: mimeType, data: Data(), isImage: false,
+                            videoFrames: frames, videoDurationSeconds: durationSeconds,
+                            videoTranscript: transcript, videoByteCount: byteCount)
+    }
+
+    /// One sampled frame, JPEG-compressed like photos but smaller:
+    /// six frames share the request body, so each stays near 150 KB.
+    private static func downscaledVideoFrame(_ image: UIImage) -> Data? {
+        var best = image.jpegData(compressionQuality: 0.6) ?? Data()
+        if best.count <= 150_000 { return best.isEmpty ? nil : best }
+        for quality in [0.45, 0.3] as [CGFloat] {
+            let attempt = image.jpegData(compressionQuality: quality) ?? Data()
+            if attempt.count < best.count { best = attempt }
+            if attempt.count <= 150_000 { return best }
+        }
+        return best.isEmpty ? nil : best
+    }
+
+    /// Transcribes the first 90 seconds of the video's audio track
+    /// with the same speech recognizer as dictation (server-based,
+    /// needs network). No authorization or no audio track means no
+    /// transcript — the frames still carry the video.
+    private static func transcribeVideoAudio(asset: AVAsset, durationSeconds: Double) async -> String {
+        guard durationSeconds > 0 else { return "" }
+        let status = SFSpeechRecognizer.authorizationStatus()
+        if status == .notDetermined {
+            let newStatus = await withCheckedContinuation { (cont: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
+                SFSpeechRecognizer.requestAuthorization { cont.resume(returning: $0) }
+            }
+            guard newStatus == .authorized else { return "" }
+        } else if status != .authorized {
+            return ""
+        }
+        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "id-ID"))
+                ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
+              recognizer.isAvailable else { return "" }
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mdm-video-audio-\(UUID().uuidString).m4a")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        guard let session = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetAppleM4A) else { return "" }
+        session.outputURL = tmp
+        session.outputFileType = .m4a
+        session.timeRange = CMTimeRange(start: .zero, duration: CMTime(seconds: min(durationSeconds, 90), preferredTimescale: 600))
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            session.exportAsynchronously { cont.resume() }
+        }
+        guard session.status == .completed else { return "" }
+        let request = SFSpeechURLRecognitionRequest(url: tmp)
+        request.shouldReportPartialResults = false
+        let lock = NSLock()
+        var done = false
+        let text = await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
+            func finish(_ value: String) {
+                lock.lock()
+                defer { lock.unlock() }
+                guard !done else { return }
+                done = true
+                cont.resume(returning: value)
+            }
+            let task = recognizer.recognitionTask(with: request) { result, error in
+                if let result, result.isFinal {
+                    finish(result.bestTranscription.formattedString)
+                } else if error != nil {
+                    finish("")
+                }
+            }
+            // Don't hang the send forever on a stalled recognizer.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 45) {
+                task.cancel()
+                finish("")
+            }
+        }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.count > 4_000 ? String(trimmed.prefix(4_000)) + "… (transkrip dipotong)" : trimmed
     }
 
     /// Downscale + re-encode as JPEG, capped so provider gateways
@@ -445,12 +647,28 @@ struct AIAttachment: Equatable, Codable {
 /// the same reason the extension import uses a UIKit presenter.
 final class AIAttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIDocumentPickerDelegate {
     private var onImage: ((Data, String) -> Void)?
+    private var onVideo: ((URL, String) -> Void)?
     private var onFile: ((URL) -> Void)?
 
     func presentPhoto(onPick: @escaping (Data, String) -> Void) {
         onImage = onPick
+        onVideo = nil
         var config = PHPickerConfiguration(photoLibrary: .shared())
         config.filter = .images
+        config.selectionLimit = 1
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = self
+        Self.topViewController()?.present(picker, animated: true)
+    }
+
+    /// Photo-library video pick: the movie is copied to a temp file
+    /// and its URL handed to the caller, which owns (and deletes) it
+    /// after sampling frames — the bytes are never loaded into memory.
+    func presentVideo(onPick: @escaping (URL, String) -> Void) {
+        onVideo = onPick
+        onImage = nil
+        var config = PHPickerConfiguration(photoLibrary: .shared())
+        config.filter = .videos
         config.selectionLimit = 1
         let picker = PHPickerViewController(configuration: config)
         picker.delegate = self
@@ -467,6 +685,23 @@ final class AIAttachmentPicker: NSObject, PHPickerViewControllerDelegate, UIDocu
 
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
         picker.dismiss(animated: true)
+        if let pickVideo = onVideo {
+            onVideo = nil
+            guard let result = results.first else { return }
+            let provider = result.itemProvider
+            guard provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) else { return }
+            provider.loadFileRepresentation(forTypeIdentifier: UTType.movie.identifier) { url, _ in
+                guard let url else { return }
+                // The picker's copy is only valid inside this callback,
+                // so copy it to our own temp file first.
+                let dest = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("mdm-pick-\(UUID().uuidString).\(url.pathExtension)")
+                guard (try? FileManager.default.copyItem(at: url, to: dest)) != nil else { return }
+                let name = url.lastPathComponent
+                DispatchQueue.main.async { pickVideo(dest, name) }
+            }
+            return
+        }
         let pick = onImage
         onImage = nil
         guard let result = results.first else { return }
@@ -568,7 +803,7 @@ enum AIClient {
     ) -> Task<Void, Never> {
         Task {
             let recent = Array(messages.suffix(20))
-            let media = attachment.flatMap { $0.isImage || $0.isPDF ? $0 : nil }
+            let media = attachment.flatMap { $0.isImage || $0.isPDF || $0.isVideo ? $0 : nil }
             let lastText = textWithAttachmentNote(recent.last?.text ?? "", attachment: attachment, mediaAttached: media != nil)
             var apiMessages: [[String: Any]] = [["role": "system", "content": chatSystemPrompt(systemPrompt, tools: tools)]]
             apiMessages += openAIHistoryMessages(recent: recent, lastText: lastText, media: media)
@@ -759,7 +994,14 @@ enum AIClient {
     /// and other binaries are described in the text itself, mirroring
     /// buildPrompt.
     private static func textWithAttachmentNote(_ text: String, attachment: AIAttachment?, mediaAttached: Bool) -> String {
-        guard let attachment, !mediaAttached else { return text }
+        guard let attachment else { return text }
+        // A video's segment timestamps + transcript must ride in the
+        // text itself even though its frames ride as media parts:
+        // frames alone carry no times.
+        if attachment.isVideo {
+            return text + "\n\n" + attachment.videoSegmentNote
+        }
+        guard !mediaAttached else { return text }
         if let readable = attachment.readableText {
             return text + "\n\nLampiran file \(attachment.fileName):\n\(readable)"
         }
@@ -787,11 +1029,13 @@ enum AIClient {
         return recent.enumerated().map { idx, msg -> [String: Any] in
             if idx == lastIndex, let media {
                 let content: [[String: Any]]
-                if media.isImage {
-                    content = [
-                        ["type": "text", "text": lastText],
-                        ["type": "image_url", "image_url": ["url": "data:\(media.mimeType);base64,\(media.data.base64EncodedString())"]],
-                    ]
+                if media.isImage || media.isVideo {
+                    // A photo rides as one image part; a video as one
+                    // image part per sampled segment frame.
+                    content = [["type": "text", "text": lastText]]
+                        + media.visualParts.map { part in
+                            ["type": "image_url", "image_url": ["url": "data:\(part.mimeType);base64,\(part.data.base64EncodedString())"]]
+                        }
                 } else {
                     content = [
                         ["type": "text", "text": lastText],
@@ -839,7 +1083,7 @@ enum AIClient {
     private static func makeChatRequest(provider: AIProvider, model: String, apiKey: String, endpoint: String, attachment: AIAttachment?, messages: [(role: String, text: String)], systemPrompt: String? = nil, tools: [AgentTool]? = nil) -> URLRequest? {
         let system = chatSystemPrompt(systemPrompt, tools: tools)
         let recent = Array(messages.suffix(20))
-        let media = attachment.flatMap { $0.isImage || $0.isPDF ? $0 : nil }
+        let media = attachment.flatMap { $0.isImage || $0.isPDF || $0.isVideo ? $0 : nil }
         let lastText = textWithAttachmentNote(recent.last?.text ?? "", attachment: attachment, mediaAttached: media != nil)
         let lastIndex = max(0, recent.count - 1)
         switch provider {
@@ -851,7 +1095,13 @@ enum AIClient {
             let contents: [[String: Any]] = recent.enumerated().map { idx, msg -> [String: Any] in
                 var parts: [[String: Any]] = [["text": idx == lastIndex ? lastText : msg.text]]
                 if idx == lastIndex, let media {
-                    parts.append(["inline_data": ["mime_type": media.mimeType, "data": media.data.base64EncodedString()]])
+                    if media.isImage || media.isVideo {
+                        for part in media.visualParts {
+                            parts.append(["inline_data": ["mime_type": part.mimeType, "data": part.data.base64EncodedString()]])
+                        }
+                    } else {
+                        parts.append(["inline_data": ["mime_type": media.mimeType, "data": media.data.base64EncodedString()]])
+                    }
                 }
                 return ["role": msg.role == "assistant" ? "model" : "user", "parts": parts]
             }
@@ -880,11 +1130,10 @@ enum AIClient {
                 "messages": recent.enumerated().map { idx, msg -> [String: Any] in
                     if idx == lastIndex, let media {
                         let content: [[String: Any]]
-                        if media.isImage {
-                            content = [
-                                ["type": "image", "source": ["type": "base64", "media_type": media.mimeType, "data": media.data.base64EncodedString()]],
-                                ["type": "text", "text": lastText],
-                            ]
+                        if media.isImage || media.isVideo {
+                            content = media.visualParts.map { part in
+                                ["type": "image", "source": ["type": "base64", "media_type": part.mimeType, "data": part.data.base64EncodedString()]]
+                            } + [["type": "text", "text": lastText]]
                         } else {
                             content = [
                                 ["type": "document", "source": ["type": "base64", "media_type": "application/pdf", "data": media.data.base64EncodedString()]],
@@ -913,7 +1162,9 @@ enum AIClient {
             parts.append("Isi halaman (dipotong):\n\(pageText)")
         }
         if let attachment {
-            if let text = attachment.readableText {
+            if attachment.isVideo {
+                parts.append(attachment.videoSegmentNote)
+            } else if let text = attachment.readableText {
                 parts.append("Lampiran file \(attachment.fileName):\n\(text)")
             } else if attachment.isImage {
                 parts.append("Lampiran: foto bernama \(attachment.fileName), terlampir sebagai gambar — lihat gambarnya untuk menjawab.")
@@ -945,8 +1196,14 @@ enum AIClient {
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             var parts: [[String: Any]] = [["text": prompt]]
-            if let attachment, attachment.isImage || attachment.isPDF {
-                parts.append(["inline_data": ["mime_type": attachment.mimeType, "data": attachment.data.base64EncodedString()]])
+            if let attachment {
+                if attachment.isImage || attachment.isVideo {
+                    for part in attachment.visualParts {
+                        parts.append(["inline_data": ["mime_type": part.mimeType, "data": part.data.base64EncodedString()]])
+                    }
+                } else if attachment.isPDF {
+                    parts.append(["inline_data": ["mime_type": attachment.mimeType, "data": attachment.data.base64EncodedString()]])
+                }
             }
             req.httpBody = try? JSONSerialization.data(withJSONObject: ["contents": [["parts": parts]]])
             return req
@@ -970,13 +1227,13 @@ enum AIClient {
             req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             // Plain string content when there is no media part (unchanged
-            // behaviour); a parts array when an image/PDF rides along.
+            // behaviour); a parts array when an image/PDF/video rides along.
             let content: Any
-            if let attachment, attachment.isImage {
-                content = [
-                    ["type": "text", "text": prompt],
-                    ["type": "image_url", "image_url": ["url": "data:\(attachment.mimeType);base64,\(attachment.data.base64EncodedString())"]],
-                ]
+            if let attachment, attachment.isImage || attachment.isVideo {
+                content = [["type": "text", "text": prompt]]
+                    + attachment.visualParts.map { part in
+                        ["type": "image_url", "image_url": ["url": "data:\(part.mimeType);base64,\(part.data.base64EncodedString())"]]
+                    }
             } else if let attachment, attachment.isPDF {
                 content = [
                     ["type": "text", "text": prompt],
@@ -999,11 +1256,10 @@ enum AIClient {
             req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             let content: Any
-            if let attachment, attachment.isImage {
-                content = [
-                    ["type": "image", "source": ["type": "base64", "media_type": attachment.mimeType, "data": attachment.data.base64EncodedString()]],
-                    ["type": "text", "text": prompt],
-                ]
+            if let attachment, attachment.isImage || attachment.isVideo {
+                content = attachment.visualParts.map { part in
+                        ["type": "image", "source": ["type": "base64", "media_type": part.mimeType, "data": part.data.base64EncodedString()]]
+                    } + [["type": "text", "text": prompt]]
             } else if let attachment, attachment.isPDF {
                 content = [
                     ["type": "document", "source": ["type": "base64", "media_type": "application/pdf", "data": attachment.data.base64EncodedString()]],
@@ -1544,6 +1800,18 @@ struct AskAIView: View {
         }
     }
 
+    /// Photo-library video: frames are sampled + audio transcribed
+    /// off the main thread; the chip appears when processing finishes.
+    private func pickVideo() {
+        attachmentPicker.presentVideo { url, name in
+            Task {
+                let att = await AIAttachment.fromVideoFile(fileName: name, url: url)
+                try? FileManager.default.removeItem(at: url)
+                await MainActor.run { attachment = att }
+            }
+        }
+    }
+
     private func pickFile() {
         attachmentPicker.presentFile { url in
             let scoped = url.startAccessingSecurityScopedResource()
@@ -1554,6 +1822,15 @@ struct AskAIView: View {
             }
             guard data.count <= 20 * 1024 * 1024 else {
                 errorText = "File terlalu besar (maks 20 MB)."
+                return
+            }
+            if AIAttachment.isVideoFile(fileName: url.lastPathComponent) {
+                let name = url.lastPathComponent
+                let mime = UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType ?? "video/mp4"
+                Task {
+                    let att = await AIAttachment.fromVideoData(fileName: name, mimeType: mime, data: data)
+                    await MainActor.run { attachment = att }
+                }
                 return
             }
             attachment = AIAttachment.fromPickedData(fileName: url.lastPathComponent, data: data)
@@ -1824,8 +2101,15 @@ struct AskAIView: View {
             if att.isImage, let uiImage = UIImage(data: att.data) {
                 Image(uiImage: uiImage).resizable().scaledToFill()
                     .frame(width: 32, height: 32).clipShape(RoundedRectangle(cornerRadius: 6))
+            } else if att.isVideo, let first = att.videoFrames.first, let uiImage = UIImage(data: first) {
+                Image(uiImage: uiImage).resizable().scaledToFill()
+                    .frame(width: 32, height: 32).clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(alignment: .center) {
+                        Image(systemName: "play.fill").font(.caption2).foregroundStyle(.white)
+                            .shadow(radius: 2)
+                    }
             } else {
-                Image(systemName: "doc.fill").foregroundStyle(.secondary)
+                Image(systemName: att.isVideo ? "film" : "doc.fill").foregroundStyle(.secondary)
             }
             Text(att.fileName).lineLimit(1)
             Text(att.displaySize).foregroundStyle(.secondary)
@@ -1876,6 +2160,10 @@ struct AskAIView: View {
                         sheetComposerActionButton(icon: "photo", label: "Foto") {
                             composerActionsExpanded = false
                             pickPhoto()
+                        }
+                        sheetComposerActionButton(icon: "film", label: "Video") {
+                            composerActionsExpanded = false
+                            pickVideo()
                         }
                         sheetComposerActionButton(icon: "folder", label: "File") {
                             composerActionsExpanded = false

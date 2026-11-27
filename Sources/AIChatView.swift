@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - AI chat tab
 //
@@ -132,8 +133,15 @@ struct AIChatView: View {
                         if att.isImage, let uiImage = UIImage(data: att.data) {
                             Image(uiImage: uiImage).resizable().scaledToFill()
                                 .frame(width: 40, height: 40).clipShape(RoundedRectangle(cornerRadius: 8))
+                        } else if att.isVideo, let first = att.videoFrames.first, let uiImage = UIImage(data: first) {
+                            Image(uiImage: uiImage).resizable().scaledToFill()
+                                .frame(width: 40, height: 40).clipShape(RoundedRectangle(cornerRadius: 8))
+                                .overlay(alignment: .center) {
+                                    Image(systemName: "play.fill").font(.caption).foregroundStyle(.white)
+                                        .shadow(radius: 2)
+                                }
                         } else {
-                            Image(systemName: "doc.fill").font(.title3).foregroundStyle(.secondary)
+                            Image(systemName: att.isVideo ? "film" : "doc.fill").font(.title3).foregroundStyle(.secondary)
                                 .frame(width: 40, height: 40)
                                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
                         }
@@ -180,6 +188,10 @@ struct AIChatView: View {
                             composerActionButton(icon: "photo", label: "Foto") {
                                 composerActionsExpanded = false
                                 pickPhoto()
+                            }
+                            composerActionButton(icon: "film", label: "Video") {
+                                composerActionsExpanded = false
+                                pickVideo()
                             }
                             composerActionButton(icon: "folder", label: "File") {
                                 composerActionsExpanded = false
@@ -648,9 +660,13 @@ struct AIChatView: View {
                             .onTapGesture {
                                 viewerImage = ViewableImage(image: uiImage, fileName: att.fileName)
                             }
+                    } else if att.isVideo, let first = att.videoFrames.first, let uiImage = UIImage(data: first) {
+                        Image(uiImage: uiImage).resizable().scaledToFit()
+                            .frame(maxWidth: 220, maxHeight: 220)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
                     } else {
                         HStack(spacing: 6) {
-                            Image(systemName: "doc.fill")
+                            Image(systemName: att.isVideo ? "film" : "doc.fill")
                             Text(att.fileName).lineLimit(1)
                             Text(att.displaySize).foregroundStyle(.secondary)
                         }
@@ -807,6 +823,18 @@ struct AIChatView: View {
         }
     }
 
+    /// Photo-library video: frames are sampled + audio transcribed
+    /// off the main thread; the chip appears when processing finishes.
+    private func pickVideo() {
+        attachmentPicker.presentVideo { url, name in
+            Task {
+                let att = await AIAttachment.fromVideoFile(fileName: name, url: url)
+                try? FileManager.default.removeItem(at: url)
+                await MainActor.run { attachment = att }
+            }
+        }
+    }
+
     private func pickFile() {
         attachmentPicker.presentFile { url in
             let scoped = url.startAccessingSecurityScopedResource()
@@ -817,6 +845,15 @@ struct AIChatView: View {
             }
             guard data.count <= 20 * 1024 * 1024 else {
                 errorText = "File terlalu besar (maks 20 MB)."
+                return
+            }
+            if AIAttachment.isVideoFile(fileName: url.lastPathComponent) {
+                let name = url.lastPathComponent
+                let mime = UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType ?? "video/mp4"
+                Task {
+                    let att = await AIAttachment.fromVideoData(fileName: name, mimeType: mime, data: data)
+                    await MainActor.run { attachment = att }
+                }
                 return
             }
             attachment = AIAttachment.fromPickedData(fileName: url.lastPathComponent, data: data)
