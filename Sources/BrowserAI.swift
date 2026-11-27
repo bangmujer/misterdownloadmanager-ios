@@ -4,6 +4,7 @@ import Security
 import UIKit
 import PhotosUI
 import UniformTypeIdentifiers
+import ZIPFoundation
 
 // MARK: - Ask AI providers
 //
@@ -342,14 +343,61 @@ struct AIAttachment: Equatable, Codable {
 
     var isPDF: Bool { mimeType == "application/pdf" }
 
+    var isZip: Bool {
+        mimeType == "application/zip" || (fileName as NSString).pathExtension.lowercased() == "zip"
+    }
+
     /// Readable text for the prompt, or nil for images, PDFs and binary
     /// files. Extension-less text and code files are covered by the
-    /// UTF-8 decode + NUL check, not by the MIME type alone.
+    /// UTF-8 decode + NUL check, not by the MIME type alone. ZIP
+    /// files are unpacked in memory and their text/code entries are
+    /// concatenated, so "jelaskan lampiran ini" on a .zip actually
+    /// reaches the model as content instead of only a file name.
     var readableText: String? {
         if isImage || isPDF { return nil }
+        if isZip { return zipTextContents() }
         guard let text = String(data: data, encoding: .utf8), !text.contains("\0") else { return nil }
         if text.count > 60_000 { return String(text.prefix(60_000)) + "\n... (dipotong — file lebih panjang dari ini)" }
         return text
+    }
+
+    /// Text/code entries of a ZIP, bounded like the downloaders'
+    /// prompt folding: at most 100 entries, 256 KB per entry, 8.000
+    /// characters total. Binary entries and entries that fail to
+    /// decode are skipped; a ZIP with no readable entries yields nil
+    /// and the caller falls back to the name-and-size note.
+    private func zipTextContents() -> String? {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mdm-zip-\(UUID().uuidString).zip")
+        do {
+            try data.write(to: tmp)
+            defer { try? FileManager.default.removeItem(at: tmp) }
+            let archive = try Archive(url: tmp, accessMode: .read)
+            var out = ""
+            var count = 0
+            for entry in archive {
+                guard count < 100 else { break }
+                guard entry.type == .file,
+                      entry.uncompressedSize > 0,
+                      entry.uncompressedSize <= 256_000 else { continue }
+                var entryData = Data()
+                do {
+                    _ = try archive.extract(entry) { chunk in entryData.append(chunk) }
+                } catch { continue }
+                guard let text = String(data: entryData, encoding: .utf8),
+                      !text.contains("\0") else { continue }
+                count += 1
+                out += "\n=== \(entry.path) ===\n" + text
+                if out.count > 8_000 {
+                    out = String(out.prefix(8_000)) + "\n... (dipotong — isi ZIP lebih panjang dari ini)"
+                    break
+                }
+            }
+            guard count > 0 else { return nil }
+            return out.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            return nil
+        }
     }
 
     static func fromPickedData(fileName: String, data: Data) -> AIAttachment {
@@ -459,13 +507,14 @@ enum AIClient {
                     attachment: AIAttachment? = nil,
                     question: String, pageTitle: String, pageURL: String, pageText: String,
                     onToken: @escaping (String) -> Void,
-                    onDone: @escaping (String?) -> Void) -> Task<Void, Never> {
+                    onDone: @escaping (String?) -> Void,
+                    onUsage: ((AIUsage) -> Void)? = nil) -> Task<Void, Never> {
         let prompt = buildPrompt(question: question, pageTitle: pageTitle, pageURL: pageURL, pageText: pageText, attachment: attachment)
         guard let request = makeRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: attachment, prompt: prompt) else {
             onDone("Tidak bisa membuat permintaan untuk \(provider.displayName).")
             return Task {}
         }
-        return stream(request: request, provider: provider, onToken: onToken, onDone: onDone)
+        return stream(request: request, provider: provider, onToken: onToken, onDone: onDone, onUsage: onUsage)
     }
 
     /// Multi-turn chat for the dedicated AI tab: the whole recent
@@ -483,12 +532,13 @@ enum AIClient {
                         systemPrompt: String? = nil,
                         tools: [AgentTool]? = nil,
                         onToken: @escaping (String) -> Void,
-                        onDone: @escaping (String?) -> Void) -> Task<Void, Never> {
+                        onDone: @escaping (String?) -> Void,
+                        onUsage: ((AIUsage) -> Void)? = nil) -> Task<Void, Never> {
         guard let request = makeChatRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: attachment, messages: messages, systemPrompt: systemPrompt, tools: tools) else {
             onDone("Tidak bisa membuat permintaan untuk \(provider.displayName).")
             return Task {}
         }
-        return stream(request: request, provider: provider, onToken: onToken, onDone: onDone)
+        return stream(request: request, provider: provider, onToken: onToken, onDone: onDone, onUsage: onUsage)
     }
 
     /// Agent mode for the AI tab: the same multi-turn chat, but the
@@ -512,7 +562,8 @@ enum AIClient {
         store: DownloadStore,
         onToken: @escaping (String) -> Void,
         onToolActivity: @escaping (String) -> Void,
-        onDone: @escaping (String?) -> Void
+        onDone: @escaping (String?) -> Void,
+        onUsage: ((AIUsage) -> Void)? = nil
     ) -> Task<Void, Never> {
         Task {
             let recent = Array(messages.suffix(20))
@@ -522,6 +573,9 @@ enum AIClient {
             apiMessages += openAIHistoryMessages(recent: recent, lastText: lastText, media: media)
             var toolsEnabled = true
             var retriedWithoutTools = false
+            // Usage sums across rounds: every round is its own API
+            // request, and the reference sheet counts requests.
+            var totalUsage: AIUsage?
             for _ in 0..<5 {
                 if Task.isCancelled { break }
                 guard let request = makeOpenAIChatRequest(provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, apiMessages: apiMessages, tools: toolsEnabled ? tools : nil) else {
@@ -529,11 +583,17 @@ enum AIClient {
                     return
                 }
                 let outcome = await runChatRound(request: request, provider: provider, onToken: onToken)
+                if let roundUsage = outcome.usage {
+                    totalUsage = totalUsage.map { $0 + roundUsage } ?? roundUsage
+                }
                 if let error = outcome.error {
                     if toolsEnabled, !retriedWithoutTools {
                         toolsEnabled = false
                         retriedWithoutTools = true
                         continue
+                    }
+                    if let totalUsage {
+                        await MainActor.run { onUsage?(totalUsage) }
                     }
                     await MainActor.run { onDone(error) }
                     return
@@ -552,6 +612,9 @@ enum AIClient {
                     await MainActor.run { onToolActivity(line) }
                     apiMessages.append(["role": "tool", "tool_call_id": call.id, "content": result])
                 }
+            }
+            if let totalUsage {
+                await MainActor.run { onUsage?(totalUsage) }
             }
             await MainActor.run { onDone(nil) }
         }
@@ -612,22 +675,23 @@ enum AIClient {
     /// (413 message, HTTP snippet) so agent mode fails the same way
     /// plain chat does. Cancellation ends the round quietly.
     private static func runChatRound(request: URLRequest, provider: AIProvider,
-                                     onToken: @escaping (String) -> Void) async -> (toolCalls: [PendingToolCall], error: String?) {
+                                     onToken: @escaping (String) -> Void) async -> (toolCalls: [PendingToolCall], error: String?, usage: AIUsage?) {
         do {
             let (bytes, response) = try await URLSession.shared.bytes(for: request)
             guard let http = response as? HTTPURLResponse else {
-                return ([], "Respons tidak dikenal dari \(provider.displayName).")
+                return ([], "Respons tidak dikenal dari \(provider.displayName).", nil)
             }
             guard (200..<300).contains(http.statusCode) else {
                 if http.statusCode == 413 {
-                    return ([], "Lampiran terlalu besar untuk server \(provider.displayName) (HTTP 413 — badan request melebihi batas gateway). Coba kirim foto/file yang lebih kecil.")
+                    return ([], "Lampiran terlalu besar untuk server \(provider.displayName) (HTTP 413 — badan request melebihi batas gateway). Coba kirim foto/file yang lebih kecil.", nil)
                 }
                 var body = ""
                 for try await line in bytes.lines { body += line + "\n" }
                 let snippet = String(body.prefix(300))
-                return ([], "Error HTTP \(http.statusCode) dari \(provider.displayName): \(snippet)")
+                return ([], "Error HTTP \(http.statusCode) dari \(provider.displayName): \(snippet)", nil)
             }
             var calls: [Int: PendingToolCall] = [:]
+            var runningUsage = AIUsage()
             for try await line in bytes.lines {
                 let trimmed = line.trimmingCharacters(in: .whitespaces)
                 guard trimmed.hasPrefix("data:") else { continue }
@@ -635,6 +699,9 @@ enum AIClient {
                 if payload == "[DONE]" { break }
                 guard let data = payload.data(using: .utf8),
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                if let chunkUsage = AIUsage.chunkUsage(provider: provider, json: json) {
+                    runningUsage.absorb(chunkUsage)
+                }
                 if let deltaText = extractDelta(provider: provider, json: json), !deltaText.isEmpty {
                     let token = deltaText
                     await MainActor.run { onToken(token) }
@@ -654,10 +721,10 @@ enum AIClient {
                 if call.id.isEmpty { call.id = "call_\(index)" }
                 return call
             }
-            return (ordered, nil)
+            return (ordered, nil, runningUsage.hasData ? runningUsage : nil)
         } catch {
-            if Task.isCancelled { return ([], nil) }
-            return ([], error.localizedDescription)
+            if Task.isCancelled { return ([], nil, nil) }
+            return ([], error.localizedDescription, nil)
         }
     }
 
@@ -705,6 +772,7 @@ enum AIClient {
         var prompt = systemPrompt ?? "Kamu adalah asisten AI serba bisa. Jawablah pertanyaan apa pun tentang topik apa pun, tanpa batasan topik — tidak terbatas pada aplikasi ini. Jawablah dalam bahasa yang sama dengan pesan pengguna, ringkas tapi lengkap."
         if tools != nil {
             prompt += "\n\nKamu dapat memakai perkakas (tools) yang disediakan untuk memeriksa keadaan aplikasi ini — file, download, tab browser, isi URL, inspeksi halaman (JavaScript, DOM, console, network, cookie, storage, info halaman), dan request API yang tersimpan di API Tester, yang bisa kamu baca dan kirim — sebelum menjawab. Pakailah perkakas saat pertanyaan membutuhkan data nyata dari aplikasi, jangan menebak. Sebutkan dengan singkat perkakas apa yang kamu pakai dan apa hasilnya."
+            prompt += "\n\nJika pesan pengguna membawa lampiran (file atau foto), isi lampiran sudah disertakan di dalam pesan itu sendiri — jawablah dari isi tersebut, dan jangan memakai perkakas untuk mencari file lampiran itu di dalam aplikasi."
         }
         return prompt
     }
@@ -754,7 +822,11 @@ enum AIClient {
         req.httpMethod = "POST"
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var body: [String: Any] = ["model": model, "stream": true, "messages": apiMessages]
+        var body: [String: Any] = ["model": model, "stream": true, "messages": apiMessages,
+                                    // Ask for the final chunk's `usage` object: without
+                                    // this, streamed OpenAI-shape responses carry no
+                                    // token counts at all.
+                                    "stream_options": ["include_usage": true]]
         if let tools, !tools.isEmpty {
             body["tools"] = tools.map(\.schema)
             body["tool_choice"] = "auto"
@@ -914,6 +986,7 @@ enum AIClient {
             }
             req.httpBody = try? JSONSerialization.data(withJSONObject: [
                 "model": model, "stream": true,
+                "stream_options": ["include_usage": true],
                 "messages": [["role": "user", "content": content]],
             ])
             return req
@@ -951,8 +1024,24 @@ enum AIClient {
     @discardableResult
     private static func stream(request: URLRequest, provider: AIProvider,
                                onToken: @escaping (String) -> Void,
-                               onDone: @escaping (String?) -> Void) -> Task<Void, Never> {
+                               onDone: @escaping (String?) -> Void,
+                               onUsage: ((AIUsage) -> Void)? = nil) -> Task<Void, Never> {
         Task {
+            // Token usage accumulates from the usage chunks (the final
+            // chunk for OpenAI/Gemini, start+delta events for Claude)
+            // and is delivered just before onDone, even for a stopped
+            // stream, so a partial answer keeps its numbers.
+            var runningUsage = AIUsage()
+            func finish(_ error: String?) {
+                // One MainActor hop delivers usage before onDone, in
+                // order, so the caller can stamp the duration onto the
+                // usage in onDone.
+                let usage = runningUsage.hasData ? runningUsage : nil
+                Task { @MainActor in
+                    if let usage { onUsage?(usage) }
+                    onDone(error)
+                }
+            }
             do {
                 let (bytes, response) = try await URLSession.shared.bytes(for: request)
                 guard let http = response as? HTTPURLResponse else {
@@ -976,19 +1065,22 @@ enum AIClient {
                     let payload = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
                     if payload == "[DONE]" { break }
                     guard let data = payload.data(using: .utf8),
-                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                          let text = extractDelta(provider: provider, json: json),
+                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                    if let chunkUsage = AIUsage.chunkUsage(provider: provider, json: json) {
+                        runningUsage.absorb(chunkUsage)
+                    }
+                    guard let text = extractDelta(provider: provider, json: json),
                           !text.isEmpty else { continue }
                     let token = text
                     await MainActor.run { onToken(token) }
                 }
-                await MainActor.run { onDone(nil) }
+                finish(nil)
             } catch {
                 // A cancelled stream (the sheet's Stop button) ends
                 // quietly with whatever arrived so far — it is not an
                 // error, and the caller must not show a failure for it.
                 if Task.isCancelled {
-                    await MainActor.run { onDone(nil) }
+                    finish(nil)
                 } else {
                     let message = error.localizedDescription
                     await MainActor.run { onDone(message) }
@@ -1035,12 +1127,18 @@ private struct AskTurn: Identifiable, Equatable {
     var answer: String
     var attachment: AIAttachment?
     var error: String?
+    /// Token usage the provider reported for this answer, if any.
+    var usage: AIUsage?
+    /// The model id that produced this answer, for the usage sheet.
+    var modelName: String = ""
 
-    init(question: String, answer: String = "", attachment: AIAttachment? = nil, error: String? = nil) {
+    init(question: String, answer: String = "", attachment: AIAttachment? = nil, error: String? = nil, usage: AIUsage? = nil, modelName: String = "") {
         self.question = question
         self.answer = answer
         self.attachment = attachment
         self.error = error
+        self.usage = usage
+        self.modelName = modelName
     }
 }
 
@@ -1070,6 +1168,7 @@ struct AskAIView: View {
     @State private var requestTask: Task<Void, Never>?
     @State private var copiedTurnID: UUID?
     @State private var viewerImage: ViewableImage?
+    @State private var usageTurn: AskTurn?
     @StateObject private var transcriber = SpeechTranscriber()
     @State private var dictationBase = ""
     @State private var composerActionsExpanded = false
@@ -1505,6 +1604,8 @@ struct AskAIView: View {
             }
         }
         history.append((role: "user", text: turn.question))
+        let startedAt = Date()
+        let sentModel = model
         requestTask = AIClient.askChat(
             provider: provider, model: model, apiKey: apiKey, endpoint: endpoint,
             attachment: turn.attachment, messages: history,
@@ -1517,11 +1618,21 @@ struct AskAIView: View {
                 isLoading = false
                 requestTask = nil
                 guard !stopped, turns.indices.contains(index) else { return }
+                if var usage = turns[index].usage {
+                    usage.durationSeconds = Date().timeIntervalSince(startedAt)
+                    turns[index].usage = usage
+                    turns[index].modelName = sentModel
+                }
                 if let message {
                     turns[index].error = message
                 } else if turns[index].answer.isEmpty {
                     turns[index].error = "Tidak ada jawaban dari \(provider.displayName). Coba cek model dan kunci API-nya."
                 }
+            },
+            onUsage: { usage in
+                guard turns.indices.contains(index) else { return }
+                turns[index].usage = usage
+                turns[index].modelName = sentModel
             }
         )
     }
@@ -1670,6 +1781,18 @@ struct AskAIView: View {
                 .padding(14)
                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
             }
+            if let usage = turn.usage, usage.hasData, !turn.answer.isEmpty {
+                Button { usageTurn = turn } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chart.bar.fill")
+                        Text(usage.caption)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
             if let error = turn.error {
                 HStack(spacing: 6) {
                     Text(error).font(.subheadline).foregroundStyle(.red)
@@ -1686,6 +1809,11 @@ struct AskAIView: View {
                     }
                     .font(.subheadline)
                 }
+            }
+        }
+        .sheet(item: $usageTurn) { turn in
+            if let usage = turn.usage {
+                MessageUsageView(modelName: turn.modelName, usage: usage)
             }
         }
     }

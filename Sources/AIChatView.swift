@@ -45,6 +45,7 @@ struct AIChatView: View {
     @State private var stashedDraft = ""
     @State private var pendingHandoff: AIChatHandoff?
     @State private var viewerImage: ViewableImage?
+    @State private var usageMessage: AIChatMessage?
     @State private var requestTask: Task<Void, Never>?
     @StateObject private var transcriber = SpeechTranscriber()
     @State private var dictationBase = ""
@@ -706,10 +707,29 @@ struct AIChatView: View {
                 }
                 .font(.caption)
             }
+            // Token usage the provider reported, when it reported any:
+            // a caption under the bubble, tapping opens the breakdown.
+            if message.role == "assistant", let usage = message.usage, usage.hasData {
+                Button { usageMessage = message } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chart.bar.fill")
+                        Text(usage.caption)
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .frame(maxWidth: .infinity, alignment: message.role == "user" ? .trailing : .leading)
         .id(message.id)
         .fullScreenCover(item: $viewerImage) { ChatImageViewer(viewable: $0) }
+        .sheet(item: $usageMessage) { msg in
+            if let usage = msg.usage {
+                MessageUsageView(modelName: msg.modelName, usage: usage)
+            }
+        }
         .contextMenu {
             if message.role == "user" {
                 Button { beginEdit(message) } label: { Label("Ubah pesan", systemImage: "pencil") }
@@ -897,11 +917,28 @@ struct AIChatView: View {
                 messages.append(AIChatMessage(id: id, role: "assistant", text: token))
             }
         }
+        // Usage arrives just before onDone (or not at all, when the
+        // gateway reports none); the duration is stamped in onDone.
+        let startedAt = Date()
+        let sentModel = model
+        var pendingUsage: AIUsage?
+        let onUsage: (AIUsage) -> Void = { usage in
+            pendingUsage = usage
+            if let idx = messages.firstIndex(where: { $0.id == id }) {
+                messages[idx].usage = usage
+                messages[idx].modelName = sentModel
+            }
+        }
         let onDone: (String?) -> Void = { message in
             requestTask = nil
             isLoading = false
             streamingID = nil
             let gotAnswer = messages.contains(where: { $0.id == id })
+            if var usage = pendingUsage, let idx = messages.firstIndex(where: { $0.id == id }) {
+                usage.durationSeconds = Date().timeIntervalSince(startedAt)
+                messages[idx].usage = usage
+                messages[idx].modelName = sentModel
+            }
             if let message {
                 errorText = message
             } else if !gotAnswer {
@@ -925,13 +962,15 @@ struct AIChatView: View {
                         messages.append(AIChatMessage(id: id, role: "assistant", text: "", toolLog: [line]))
                     }
                 },
-                onDone: onDone
+                onDone: onDone,
+                onUsage: onUsage
             )
         } else {
             requestTask = AIClient.askChat(
                 provider: provider, model: model, apiKey: apiKey, endpoint: endpoint, attachment: userMessage.attachment, messages: history,
                 onToken: onToken,
-                onDone: onDone
+                onDone: onDone,
+                onUsage: onUsage
             )
         }
     }
@@ -1223,6 +1262,76 @@ private struct AIChatSettingsView: View {
         list.removeAll { $0 == id }
         store.browserSettings.aiCustomModels[provider.rawValue] = list
         store.saveBrowserSettings()
+    }
+}
+
+// MARK: - Message usage (token statistics)
+
+/// The reference sheet's "Message usage": what the provider reported
+/// for one answer — totals, input/output split with cache and
+/// reasoning detail, timing and speed. Cost is honestly unavailable:
+/// no provider in this app returns cost data.
+struct MessageUsageView: View {
+    var modelName: String
+    var usage: AIUsage
+    @Environment(\.dismiss) private var dismiss
+
+    private func row(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            Text(value).font(.subheadline.weight(.medium))
+        }
+        .font(.subheadline)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Text(modelName.isEmpty ? "Model tidak tercatat" : modelName)
+                        .font(.headline)
+                        .lineLimit(2)
+                    Text("Total token")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Text(AIUsage.formatted(usage.totalTokens))
+                        .font(.system(size: 40, weight: .bold))
+                    row("Permintaan", "\(usage.requests)")
+                }
+                Section {
+                    HStack(spacing: 24) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("● Input").font(.subheadline)
+                            Text(AIUsage.formatted(usage.inputTokens))
+                                .font(.title3.weight(.semibold))
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("● Output").font(.subheadline)
+                            Text(AIUsage.formatted(usage.outputTokens))
+                                .font(.title3.weight(.semibold))
+                        }
+                        Spacer()
+                    }
+                    row("Input tanpa cache", AIUsage.formatted(usage.uncachedInputTokens))
+                    row("Cache dibaca", AIUsage.formatted(usage.cachedInputTokens))
+                    row("Cache ditulis", AIUsage.formatted(usage.cacheWriteTokens))
+                    row("Output penalaran", AIUsage.formatted(usage.reasoningTokens))
+                }
+                Section("Waktu dan kecepatan") {
+                    row("Total waktu", String(format: "%.1f dtk", usage.durationSeconds).replacingOccurrences(of: ".", with: ","))
+                    let speed = String(format: "%.1f", usage.tokensPerSecond).replacingOccurrences(of: ".", with: ",")
+                    row("Kecepatan keseluruhan", "\(speed) token/dtk")
+                }
+                Section("Biaya") {
+                    Text("Tidak tersedia")
+                    Text("Provider yang dipakai aplikasi ini tidak mengembalikan data biaya.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Penggunaan pesan")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Selesai") { dismiss() } } }
+        }
     }
 }
 

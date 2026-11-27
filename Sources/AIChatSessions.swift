@@ -24,12 +24,18 @@ struct AIChatMessage: Identifiable, Equatable, Codable {
     /// The prompt the generated image was made from, for the caption
     /// and the export.
     var generatedPrompt: String = ""
+    /// Token usage the provider reported for this answer, if any.
+    /// Defaulted so chats saved before usage tracking still decode.
+    var usage: AIUsage? = nil
+    /// The model id that produced this answer, for the usage sheet.
+    /// Defaulted for the same reason.
+    var modelName: String = ""
 
     // Explicit init: the synthesized memberwise init does not expose
     // `id` (it has a default value), and the streaming path needs to
     // construct a message with a known id to append tokens to.
     init(id: UUID = UUID(), role: String, text: String, attachment: AIAttachment? = nil, toolLog: [String] = [],
-         generatedImage: Data = Data(), generatedPrompt: String = "") {
+         generatedImage: Data = Data(), generatedPrompt: String = "", usage: AIUsage? = nil, modelName: String = "") {
         self.id = id
         self.role = role
         self.text = text
@@ -37,6 +43,8 @@ struct AIChatMessage: Identifiable, Equatable, Codable {
         self.toolLog = toolLog
         self.generatedImage = generatedImage
         self.generatedPrompt = generatedPrompt
+        self.usage = usage
+        self.modelName = modelName
     }
 }
 
