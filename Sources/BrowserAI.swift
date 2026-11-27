@@ -1132,16 +1132,22 @@ struct AskAIView: View {
                             }
                             Text("Model").font(.headline)
                             if provider == .balitech {
-                                Picker("Model", selection: AIProvider.balitechModelPickerBinding(model: $model)) {
+                                Picker("Model", selection: AIProvider.modelPickerBinding(model: $model, known: AIProvider.knownModelIDs(for: .balitech, settings: store.browserSettings))) {
                                     ForEach(AIProvider.balitechModels, id: \.id) { m in
                                         Text(m.name).tag(m.id)
                                     }
-                                    Text("Kustom…").tag(AIProvider.balitechCustomTag)
+                                    ForEach((store.browserSettings.aiDiscoveredModels[AIProvider.balitech.rawValue] ?? []).filter { !AIProvider.isBalitechCatalogModel($0) }, id: \.self) { id in
+                                        Text(id).tag(id)
+                                    }
+                                    ForEach(store.browserSettings.aiCustomModels[AIProvider.balitech.rawValue] ?? [], id: \.self) { id in
+                                        Text(id).tag(id)
+                                    }
+                                    Text("Kustom…").tag(AIProvider.modelCustomTag)
                                 }
                                 .pickerStyle(.menu)
                                 .padding(.horizontal, 12).padding(.vertical, 10)
                                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                                if !AIProvider.isBalitechCatalogModel(model) {
+                                if !AIProvider.knownModelIDs(for: .balitech, settings: store.browserSettings).contains(model) {
                                     TextField("Model", text: $model)
                                         .focused($fieldFocused)
                                         .autocapitalization(.none).autocorrectionDisabled()
@@ -1150,16 +1156,22 @@ struct AskAIView: View {
                                 }
                                 Text(model).font(.caption).foregroundStyle(.secondary)
                             } else if provider == .gemini {
-                                Picker("Model", selection: AIProvider.geminiModelPickerBinding(model: $model)) {
+                                Picker("Model", selection: AIProvider.modelPickerBinding(model: $model, known: AIProvider.knownModelIDs(for: .gemini, settings: store.browserSettings))) {
                                     ForEach(AIProvider.geminiModels, id: \.id) { m in
                                         Text(m.name).tag(m.id)
                                     }
-                                    Text("Kustom…").tag(AIProvider.geminiCustomTag)
+                                    ForEach((store.browserSettings.aiDiscoveredModels[AIProvider.gemini.rawValue] ?? []).filter { !AIProvider.isGeminiCatalogModel($0) }, id: \.self) { id in
+                                        Text(id).tag(id)
+                                    }
+                                    ForEach(store.browserSettings.aiCustomModels[AIProvider.gemini.rawValue] ?? [], id: \.self) { id in
+                                        Text(id).tag(id)
+                                    }
+                                    Text("Kustom…").tag(AIProvider.modelCustomTag)
                                 }
                                 .pickerStyle(.menu)
                                 .padding(.horizontal, 12).padding(.vertical, 10)
                                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                                if !AIProvider.isGeminiCatalogModel(model) {
+                                if !AIProvider.knownModelIDs(for: .gemini, settings: store.browserSettings).contains(model) {
                                     TextField("Model", text: $model)
                                         .focused($fieldFocused)
                                         .autocapitalization(.none).autocorrectionDisabled()
@@ -1168,16 +1180,22 @@ struct AskAIView: View {
                                 }
                                 Text(model).font(.caption).foregroundStyle(.secondary)
                             } else if provider == .chatgpt {
-                                Picker("Model", selection: AIProvider.chatgptModelPickerBinding(model: $model)) {
+                                Picker("Model", selection: AIProvider.modelPickerBinding(model: $model, known: AIProvider.knownModelIDs(for: .chatgpt, settings: store.browserSettings))) {
                                     ForEach(AIProvider.chatgptModels, id: \.id) { m in
                                         Text(m.name).tag(m.id)
                                     }
-                                    Text("Kustom…").tag(AIProvider.chatgptCustomTag)
+                                    ForEach((store.browserSettings.aiDiscoveredModels[AIProvider.chatgpt.rawValue] ?? []).filter { !AIProvider.isChatGPTCatalogModel($0) }, id: \.self) { id in
+                                        Text(id).tag(id)
+                                    }
+                                    ForEach(store.browserSettings.aiCustomModels[AIProvider.chatgpt.rawValue] ?? [], id: \.self) { id in
+                                        Text(id).tag(id)
+                                    }
+                                    Text("Kustom…").tag(AIProvider.modelCustomTag)
                                 }
                                 .pickerStyle(.menu)
                                 .padding(.horizontal, 12).padding(.vertical, 10)
                                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                                if !AIProvider.isChatGPTCatalogModel(model) {
+                                if !AIProvider.knownModelIDs(for: .chatgpt, settings: store.browserSettings).contains(model) {
                                     TextField("Model", text: $model)
                                         .focused($fieldFocused)
                                         .autocapitalization(.none).autocorrectionDisabled()
@@ -1186,16 +1204,22 @@ struct AskAIView: View {
                                 }
                                 Text(model).font(.caption).foregroundStyle(.secondary)
                             } else if provider == .claude {
-                                Picker("Model", selection: AIProvider.claudeModelPickerBinding(model: $model)) {
+                                Picker("Model", selection: AIProvider.modelPickerBinding(model: $model, known: AIProvider.knownModelIDs(for: .claude, settings: store.browserSettings))) {
                                     ForEach(AIProvider.claudeModels, id: \.id) { m in
                                         Text(m.name).tag(m.id)
                                     }
-                                    Text("Kustom…").tag(AIProvider.claudeCustomTag)
+                                    ForEach((store.browserSettings.aiDiscoveredModels[AIProvider.claude.rawValue] ?? []).filter { !AIProvider.isClaudeCatalogModel($0) }, id: \.self) { id in
+                                        Text(id).tag(id)
+                                    }
+                                    ForEach(store.browserSettings.aiCustomModels[AIProvider.claude.rawValue] ?? [], id: \.self) { id in
+                                        Text(id).tag(id)
+                                    }
+                                    Text("Kustom…").tag(AIProvider.modelCustomTag)
                                 }
                                 .pickerStyle(.menu)
                                 .padding(.horizontal, 12).padding(.vertical, 10)
                                 .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                                if !AIProvider.isClaudeCatalogModel(model) {
+                                if !AIProvider.knownModelIDs(for: .claude, settings: store.browserSettings).contains(model) {
                                     TextField("Model", text: $model)
                                         .focused($fieldFocused)
                                         .autocapitalization(.none).autocorrectionDisabled()
@@ -1204,11 +1228,26 @@ struct AskAIView: View {
                                 }
                                 Text(model).font(.caption).foregroundStyle(.secondary)
                             } else {
-                                TextField("Model", text: $model)
-                                    .focused($fieldFocused)
-                                    .autocapitalization(.none).autocorrectionDisabled()
-                                    .padding(.horizontal, 12).padding(.vertical, 10)
-                                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                Picker("Model", selection: AIProvider.modelPickerBinding(model: $model, known: AIProvider.knownModelIDs(for: .custom, settings: store.browserSettings))) {
+                                    ForEach(store.browserSettings.aiDiscoveredModels[AIProvider.custom.rawValue] ?? [], id: \.self) { id in
+                                        Text(id).tag(id)
+                                    }
+                                    ForEach(store.browserSettings.aiCustomModels[AIProvider.custom.rawValue] ?? [], id: \.self) { id in
+                                        Text(id).tag(id)
+                                    }
+                                    Text("Kustom…").tag(AIProvider.modelCustomTag)
+                                }
+                                .pickerStyle(.menu)
+                                .padding(.horizontal, 12).padding(.vertical, 10)
+                                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                if !AIProvider.knownModelIDs(for: .custom, settings: store.browserSettings).contains(model) {
+                                    TextField("Model", text: $model)
+                                        .focused($fieldFocused)
+                                        .autocapitalization(.none).autocorrectionDisabled()
+                                        .padding(.horizontal, 12).padding(.vertical, 10)
+                                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                                }
+                                Text(model).font(.caption).foregroundStyle(.secondary)
                             }
                             Text("API key").font(.headline)
                             SecureField("API key \(provider.displayName)", text: $apiKey)

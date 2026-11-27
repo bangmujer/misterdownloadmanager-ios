@@ -1008,6 +1008,9 @@ private struct AIChatSettingsView: View {
     @Binding var endpoint: String
     @Binding var apiKey: String
     @Binding var keySaved: Bool
+    @State private var fetchingModels = false
+    @State private var fetchStatus: String?
+    @State private var newCustomModel = ""
 
     /// API providers only: Meta has no public API, so it cannot chat
     /// from inside the app and is not offered here.
@@ -1030,57 +1033,73 @@ private struct AIChatSettingsView: View {
                         Text("URL dasar endpoint-nya — boleh juga ditempel lengkap sampai /chat/completions. Permintaan dikirim persis seperti contoh curl kemarin: POST, header Authorization Bearer, body model + messages.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    if provider == .balitech {
-                        Picker("Model", selection: AIProvider.balitechModelPickerBinding(model: $model)) {
-                            ForEach(AIProvider.balitechModels, id: \.id) { m in
-                                Text(m.name).tag(m.id)
+                    // One picker for every provider: built-in catalog,
+                    // models read from the server, and the user's own
+                    // custom ids, then the free-text "Kustom…" row.
+                    let known = AIProvider.knownModelIDs(for: provider, settings: store.browserSettings)
+                    let discovered = (store.browserSettings.aiDiscoveredModels[provider.rawValue] ?? []).filter { !provider.catalogIDs.contains($0) }
+                    let customs = store.browserSettings.aiCustomModels[provider.rawValue] ?? []
+                    Picker("Model", selection: AIProvider.modelPickerBinding(model: $model, known: known)) {
+                        if !provider.catalogEntries.isEmpty {
+                            Section("Bawaan") {
+                                ForEach(provider.catalogEntries, id: \.id) { entry in
+                                    Text(entry.name).tag(entry.id)
+                                }
                             }
-                            Text("Kustom…").tag(AIProvider.balitechCustomTag)
                         }
-                        if !AIProvider.isBalitechCatalogModel(model) {
-                            TextField("Model", text: $model)
-                                .autocapitalization(.none).autocorrectionDisabled()
-                        }
-                        Text(model).font(.caption).foregroundStyle(.secondary)
-                    } else if provider == .gemini {
-                        Picker("Model", selection: AIProvider.geminiModelPickerBinding(model: $model)) {
-                            ForEach(AIProvider.geminiModels, id: \.id) { m in
-                                Text(m.name).tag(m.id)
+                        if !discovered.isEmpty {
+                            Section("Dari server") {
+                                ForEach(discovered, id: \.self) { id in
+                                    Text(id).tag(id)
+                                }
                             }
-                            Text("Kustom…").tag(AIProvider.geminiCustomTag)
                         }
-                        if !AIProvider.isGeminiCatalogModel(model) {
-                            TextField("Model", text: $model)
-                                .autocapitalization(.none).autocorrectionDisabled()
-                        }
-                        Text(model).font(.caption).foregroundStyle(.secondary)
-                    } else if provider == .chatgpt {
-                        Picker("Model", selection: AIProvider.chatgptModelPickerBinding(model: $model)) {
-                            ForEach(AIProvider.chatgptModels, id: \.id) { m in
-                                Text(m.name).tag(m.id)
+                        if !customs.isEmpty {
+                            Section("Kustom") {
+                                ForEach(customs, id: \.self) { id in
+                                    Text(id).tag(id)
+                                }
                             }
-                            Text("Kustom…").tag(AIProvider.chatgptCustomTag)
                         }
-                        if !AIProvider.isChatGPTCatalogModel(model) {
-                            TextField("Model", text: $model)
-                                .autocapitalization(.none).autocorrectionDisabled()
-                        }
-                        Text(model).font(.caption).foregroundStyle(.secondary)
-                    } else if provider == .claude {
-                        Picker("Model", selection: AIProvider.claudeModelPickerBinding(model: $model)) {
-                            ForEach(AIProvider.claudeModels, id: \.id) { m in
-                                Text(m.name).tag(m.id)
-                            }
-                            Text("Kustom…").tag(AIProvider.claudeCustomTag)
-                        }
-                        if !AIProvider.isClaudeCatalogModel(model) {
-                            TextField("Model", text: $model)
-                                .autocapitalization(.none).autocorrectionDisabled()
-                        }
-                        Text(model).font(.caption).foregroundStyle(.secondary)
-                    } else {
+                        Text("Kustom…").tag(AIProvider.modelCustomTag)
+                    }
+                    if !known.contains(model) {
                         TextField("Model", text: $model)
                             .autocapitalization(.none).autocorrectionDisabled()
+                    }
+                    Text(model).font(.caption).foregroundStyle(.secondary)
+                    // Read the list straight from the provider's base URL.
+                    HStack(spacing: 10) {
+                        Button("Muat model dari server") { fetchModelsFromServer() }
+                            .disabled(fetchingModels)
+                        if fetchingModels { ProgressView() }
+                        Spacer()
+                        if let fetchedAt = store.browserSettings.aiModelsFetchedAt[provider.rawValue] {
+                            Text("Diperbarui \(RelativeTime.ago(Date(timeIntervalSince1970: fetchedAt)))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.subheadline)
+                    if let fetchStatus {
+                        Text(fetchStatus).font(.caption).foregroundStyle(.secondary)
+                    }
+                    // Custom models: as many as wanted, kept per provider.
+                    HStack(spacing: 8) {
+                        TextField("ID model kustom, mis. bt/model-baru", text: $newCustomModel)
+                            .autocapitalization(.none).autocorrectionDisabled()
+                        Button("Tambah") { addCustomModel() }
+                            .disabled(newCustomModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    .font(.subheadline)
+                    ForEach(customs, id: \.self) { id in
+                        HStack {
+                            Text(id).font(.subheadline)
+                            Spacer()
+                            Button(role: .destructive) { removeCustomModel(id) } label: {
+                                Image(systemName: "trash").font(.subheadline)
+                            }
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
                 Section("API key") {
@@ -1158,6 +1177,52 @@ private struct AIChatSettingsView: View {
                 store.saveBrowserSettings()
             }
         }
+    }
+
+    /// GET {base}/models (or the provider's own list endpoint) with the
+    /// saved key, and cache the ids for the picker. A gateway that
+    /// answers with an error keeps the catalog + custom lists; the
+    /// error is shown plainly instead of failing silently.
+    private func fetchModelsFromServer() {
+        fetchingModels = true
+        fetchStatus = nil
+        let key = apiKey.isEmpty ? (KeychainHelper.load(account: provider.rawValue) ?? "") : apiKey
+        ModelDiscovery.fetch(provider: provider, endpoint: endpoint, apiKey: key) { result in
+            DispatchQueue.main.async {
+                fetchingModels = false
+                switch result {
+                case .success(let ids):
+                    store.browserSettings.aiDiscoveredModels[provider.rawValue] = ids
+                    store.browserSettings.aiModelsFetchedAt[provider.rawValue] = Date().timeIntervalSince1970
+                    store.saveBrowserSettings()
+                    fetchStatus = ids.isEmpty
+                        ? "Server tidak mengembalikan model apa pun."
+                        : "\(ids.count) model dimuat dari server."
+                case .failure(let error):
+                    fetchStatus = error.message
+                }
+            }
+        }
+    }
+
+    private func addCustomModel() {
+        let id = newCustomModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return }
+        var list = store.browserSettings.aiCustomModels[provider.rawValue] ?? []
+        if !list.contains(id) {
+            list.append(id)
+            store.browserSettings.aiCustomModels[provider.rawValue] = list
+            store.saveBrowserSettings()
+        }
+        model = id
+        newCustomModel = ""
+    }
+
+    private func removeCustomModel(_ id: String) {
+        var list = store.browserSettings.aiCustomModels[provider.rawValue] ?? []
+        list.removeAll { $0 == id }
+        store.browserSettings.aiCustomModels[provider.rawValue] = list
+        store.saveBrowserSettings()
     }
 }
 

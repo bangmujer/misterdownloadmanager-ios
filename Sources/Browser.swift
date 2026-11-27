@@ -268,6 +268,15 @@ struct BrowserSettings: Codable {
         "Custom": "deepseek-v4.1-flash",
     ]
     var aiCustomEndpoint: String = "https://balitechsolution.com/v3"
+    // Model discovery: ids read from the provider's own GET /models
+    // endpoint (aiDiscoveredModels, refreshed by "Muat model dari
+    // server") and ids the user typed in themselves (aiCustomModels,
+    // unlimited). Both are keyed by provider rawValue and defaulted so
+    // older saved settings still decode. aiModelsFetchedAt records the
+    // last successful fetch per provider (unix time).
+    var aiDiscoveredModels: [String: [String]] = [:]
+    var aiCustomModels: [String: [String]] = [:]
+    var aiModelsFetchedAt: [String: Double] = [:]
     // Provider for the dedicated AI chat tab. Separate from aiProvider
     // (the Ask AI sheet): the chat tab defaults to the OpenAI-compatible
     // Custom endpoint.
